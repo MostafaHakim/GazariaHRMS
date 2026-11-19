@@ -1,0 +1,10 @@
+const router=require("express").Router();
+const c=require("../controllers/financeController");
+const {authorize}=require("../middleware/authMiddleware");
+router.get("/expenses",c.listExpenses);
+router.post("/expenses",authorize("ADMIN","HR"),c.createExpense);
+router.patch("/expenses/:id",authorize("ADMIN","HR"),c.updateExpense);
+router.get("/payments",c.listPayments);
+router.post("/payments",authorize("ADMIN","HR"),c.createPayment);
+router.get("/audit",authorize("ADMIN"),c.listAudit);
+module.exports=router;
