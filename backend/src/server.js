@@ -127,28 +127,28 @@ app.use(errorMiddleware);
 
 // Start Server
 
-// const startServer = async () => {
-//   try {
-//     getSecret(); // JWT_SECRET না থাকলে এখানেই থেমে যাবে
-//     await connectDB();
-//     await ensureInitialCompanies();
-//     await ensureInitialAdmin();
+const startServer = async () => {
+  try {
+    getSecret(); // JWT_SECRET না থাকলে এখানেই থেমে যাবে
+    await connectDB();
+    await ensureInitialCompanies();
+    await ensureInitialAdmin();
 
-//     // app.listen(PORT, "0.0.0.0", () => {
-//     //   console.log(`Gazaria HRMS running on port ${PORT}`);
-//     //   // Start background jobs after server is up
-//     //   try {
-//     //     startCronJobs();
-//     //   } catch (cronErr) {
-//     //     console.error("Cron start failed:", cronErr.message);
-//     //   }
-//     // });
-//   } catch (error) {
-//     console.error("Server startup failed:", error.message);
-//     process.exit(1);
-//   }
-// };
+    // app.listen(PORT, "0.0.0.0", () => {
+    //   console.log(`Gazaria HRMS running on port ${PORT}`);
+    //   // Start background jobs after server is up
+    //   try {
+    //     startCronJobs();
+    //   } catch (cronErr) {
+    //     console.error("Cron start failed:", cronErr.message);
+    //   }
+    // });
+  } catch (error) {
+    console.error("Server startup failed:", error.message);
+    process.exit(1);
+  }
+};
 
-// startServer();
+startServer();
 
 module.exports = app;
