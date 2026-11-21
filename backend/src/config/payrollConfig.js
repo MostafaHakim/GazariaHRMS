@@ -18,6 +18,9 @@ module.exports = {
   INCOMPLETE_AS_ABSENT: process.env.PAYROLL_INCOMPLETE_AS_ABSENT !== "false",
   // UNPAID ধরনের ছুটি বেতন কাটবে (Absent হিসেবে গণ্য)
   UNPAID_LEAVE_AS_ABSENT: true,
+  // স্যান্ডউইচ নিয়ম: বৃহস্পতিবার বা শনিবার Absent থাকলে শুক্রবারও Absent গণ্য (সাপ্তাহিক ছুটির বেতন নেই)।
+  // শুক্রবার কাজ করলে (২+ পাঞ্চ বা OT) এই নিয়ম খাটে না। বন্ধ করতে .env এ PAYROLL_FRIDAY_SANDWICH=false
+  FRIDAY_SANDWICH_ABSENT: process.env.PAYROLL_FRIDAY_SANDWICH !== "false",
 
   // শিটে এই ডিপার্টমেন্টগুলোর Att. Bonus ঘরে হাতে 0 বসানো (ফর্মুলা নেই) — তাই বোনাস পায় না
   BONUS_EXCLUDED_DEPARTMENTS: (process.env.PAYROLL_BONUS_EXCLUDED || "Floor Staff,Security,Delivery,Driver")

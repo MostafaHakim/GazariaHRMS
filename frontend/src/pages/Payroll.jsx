@@ -137,7 +137,10 @@ const Payroll = () => {
   const handleExport = async () => {
     try {
       setExporting(true);
-      const res = await api.get("/payroll/export", { params: { month }, responseType: "blob" });
+      const res = await api.get("/payroll/export", {
+        params: { month, ...(department ? { departments: department } : {}) },
+        responseType: "blob",
+      });
       const cd = res.headers["content-disposition"] || "";
       const name = /filename="?([^"]+)"?/.exec(cd)?.[1] || `Payroll_${month}.xlsx`;
       const url = URL.createObjectURL(res.data);
@@ -224,7 +227,7 @@ const Payroll = () => {
             <button onClick={handleExport} disabled={exporting}
               className="flex items-center gap-2 rounded-lg border bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60">
               {exporting ? <Loader2 size={16} className="animate-spin" /> : <FileSpreadsheet size={16} className="text-emerald-600" />}
-              Export Excel
+              {department ? `Export Excel (${department})` : "Export Excel"}
             </button>
           )}
           {isAdmin && run?.status === "DRAFT" && (

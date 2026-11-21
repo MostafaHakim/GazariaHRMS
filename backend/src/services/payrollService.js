@@ -32,15 +32,41 @@ const round2 = (v) => Math.round((Number(v) + Number.EPSILON) * 100) / 100;
 // মাসের অ্যাটেনডেন্স থেকে প্রতি কর্মীর স্ট্যাটস
 const loadAttendanceStats = async (month, companyId, employeeIds = null) => {
   const { start, end, monthDays } = monthRange(month);
-  const filter = { company: companyId, attendanceDate: { $gte: start, $lt: end } };
+  // মাসের আগের/পরের ১ দিন সহ আনা: ১ তারিখ শুক্রবার হলে বৃহস্পতিবার (আগের মাস),
+  // শেষ তারিখ শুক্রবার হলে শনিবার (পরের মাস) দেখতে হয়
+  const DAY = 24 * 60 * 60 * 1000;
+  const filter = {
+    company: companyId,
+    attendanceDate: { $gte: new Date(start.getTime() - DAY), $lt: new Date(end.getTime() + DAY) },
+  };
   if (employeeIds) filter.employee = { $in: employeeIds };
 
-  const [records, shifts] = await Promise.all([
+  const [allRecords, shifts] = await Promise.all([
     DailyAttendance.find(filter)
-      .select("employee status shift shiftCode overtimeMinutes remarks")
+      .select("employee attendanceDate status shift shiftCode overtimeMinutes punchCount remarks")
       .lean(),
     Shift.find({ company: companyId }).select("_id code isNightShift").lean(),
   ]);
+
+  // শুধু এই মাসের রেকর্ড গোনা হবে; আশপাশের দিন শুধু স্যান্ডউইচ যাচাইয়ের জন্য
+  const records = allRecords.filter((r) => r.attendanceDate >= start && r.attendanceDate < end);
+
+  const dayKey = (d) => new Date(d).toISOString().slice(0, 10);
+  const byEmpDay = new Map(); // "empId|YYYY-MM-DD" -> record
+  for (const r of allRecords) byEmpDay.set(`${r.employee}|${dayKey(r.attendanceDate)}`, r);
+
+  // এই দিনটি কি "Absent" ধরা হয়? (পেরোলের নিজস্ব নিয়ম অনুযায়ী)
+  const isAbsentDay = (empId, date) => {
+    const r = byEmpDay.get(`${empId}|${dayKey(date)}`);
+    if (!r) {
+      // রেকর্ড না থাকা দিন মাসের ভেতরে হলে Absent গণ্য (missingDays এর মতোই); মাসের বাইরে হলে অজানা = Absent নয়
+      return date >= start && date < end;
+    }
+    if (r.status === "ABSENT") return true;
+    if (r.status === "INCOMPLETE" && cfg.INCOMPLETE_AS_ABSENT) return true;
+    if (r.status === "LEAVE" && cfg.UNPAID_LEAVE_AS_ABSENT && /\(UNPAID\)/i.test(r.remarks || "")) return true;
+    return false;
+  };
 
   const nightById = new Map(shifts.map((s) => [String(s._id), !!s.isNightShift]));
   const nightByCode = new Map(shifts.map((s) => [s.code, !!s.isNightShift]));
@@ -53,7 +79,7 @@ const loadAttendanceStats = async (month, companyId, employeeIds = null) => {
       s = {
         recorded: 0, present: 0, late: 0, absent: 0, incomplete: 0,
         weeklyOff: 0, holiday: 0, leave: 0, unpaidLeave: 0,
-        night: 0, otDayMin: 0, otNightMin: 0,
+        night: 0, otDayMin: 0, otNightMin: 0, sandwich: 0,
       };
       stats.set(key, s);
     }
@@ -68,7 +94,24 @@ const loadAttendanceStats = async (month, companyId, employeeIds = null) => {
       case "LATE": s.late++; break;
       case "ABSENT": s.absent++; break;
       case "INCOMPLETE": s.incomplete++; break;
-      case "WEEKLY_OFF": s.weeklyOff++; break;
+      case "WEEKLY_OFF": {
+        // শুক্রবার: আগের দিন (বৃহস্পতি) বা পরের দিন (শনি) Absent থাকলে শুক্রবারও Absent, ছুটির বেতন নেই।
+        // শুক্রবার কাজ করে থাকলে (২+ পাঞ্চ) এটি খাটে না।
+        const d = new Date(r.attendanceDate);
+        const worked = (r.punchCount || 0) >= 2 || (r.overtimeMinutes || 0) > 0;
+        if (
+          cfg.FRIDAY_SANDWICH_ABSENT &&
+          d.getUTCDay() === 5 &&
+          !worked &&
+          (isAbsentDay(key, new Date(d.getTime() - DAY)) || isAbsentDay(key, new Date(d.getTime() + DAY)))
+        ) {
+          s.absent++;
+          s.sandwich++;
+        } else {
+          s.weeklyOff++;
+        }
+        break;
+      }
       case "HOLIDAY": s.holiday++; break;
       case "LEAVE":
         s.leave++;
@@ -90,7 +133,7 @@ const statsToAuto = (s, monthDays) => {
   const empty = !s;
   const st = s || {
     recorded: 0, present: 0, late: 0, absent: 0, incomplete: 0,
-    weeklyOff: 0, holiday: 0, leave: 0, unpaidLeave: 0, night: 0, otDayMin: 0, otNightMin: 0,
+    weeklyOff: 0, holiday: 0, leave: 0, unpaidLeave: 0, night: 0, otDayMin: 0, otNightMin: 0, sandwich: 0,
   };
   const missingDays = Math.max(0, monthDays - st.recorded);
   const unpaid = cfg.UNPAID_LEAVE_AS_ABSENT ? st.unpaidLeave : 0;
@@ -104,6 +147,7 @@ const statsToAuto = (s, monthDays) => {
     otDayHours: round2(st.otDayMin / 60),
     otNightHours: round2(st.otNightMin / 60),
     incompleteDays: st.incomplete,
+    sandwichDays: st.sandwich,
     missingDays,
     noAttendance: empty,
   };

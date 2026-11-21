@@ -198,14 +198,40 @@ exports.exportExcel = async (req, res, next) => {
       });
     }
 
-    const workbook = await buildWorkbook(month, lines);
+    // সেকশন (ডিপার্টমেন্ট) ফিল্টার: ?departments=Needle,Crochet  (খালি = সব)
+    const rawFilter = String(req.query.departments || req.query.department || "");
+    const wanted = rawFilter
+      .split(",")
+      .map((x) => x.trim().toLowerCase())
+      .filter(Boolean);
+    const exportLines = wanted.length
+      ? lines
+          .filter((l) => wanted.includes(String(l.department || "").trim().toLowerCase()))
+          .map((l, i) => ({ ...l, sl: i + 1 }))
+      : lines;
+
+    if (wanted.length && exportLines.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "এই সেকশনে কোনো কর্মী পাওয়া যায়নি",
+      });
+    }
+
+    const workbook = await buildWorkbook(month, exportLines);
+    const baseName = exportFileName(month);
+    const suffix = wanted.length
+      ? wanted.length === 1
+        ? rawFilter.trim().replace(/[^\w-]+/g, "_")
+        : "Selected"
+      : "";
+    const fileName = suffix ? baseName.replace(".xlsx", `_${suffix}.xlsx`) : baseName;
     res.setHeader(
       "Content-Type",
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     );
     res.setHeader(
       "Content-Disposition",
-      `attachment; filename="${exportFileName(month)}"`,
+      `attachment; filename="${fileName}"`,
     );
     res.setHeader("Access-Control-Expose-Headers", "Content-Disposition");
     await workbook.xlsx.write(res);
