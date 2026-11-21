@@ -30,112 +30,189 @@ import { useAppSelector } from "../../hooks/useAppSelector";
 const menuGroups = [
   {
     title: "MAIN MENU",
+    roles: ["ADMIN"],
     items: [
-      { label: "Dashboard", path: "/dashboard", icon: LayoutDashboard },
-      { label: "Group Dashboard", path: "/group-dashboard", icon: BarChart3, adminOnly: true },
+      {
+        label: "Dashboard",
+        path: "/dashboard",
+        icon: LayoutDashboard,
+        roles: ["ADMIN"],
+      },
+
+      {
+        label: "Group Dashboard",
+        path: "/group-dashboard",
+        icon: BarChart3,
+        roles: ["ADMIN"],
+      },
     ],
   },
   {
     title: "HR MANAGEMENT",
+    roles: ["ADMIN", "HR"],
     items: [
       {
         label: "Employees",
         path: "/employees",
         icon: Users,
+        roles: ["ADMIN", "HR"],
       },
       {
         label: "Departments",
         path: "/departments",
         icon: Building2,
+        roles: ["ADMIN", "HR"],
       },
       {
         label: "Designations",
         path: "/designations",
         icon: BriefcaseBusiness,
+        roles: ["ADMIN", "HR"],
       },
       {
         label: "Attendance",
         path: "/attendance",
         icon: Fingerprint,
+        roles: ["ADMIN", "HR"],
       },
       {
         label: "Shifts",
         path: "/shifts",
         icon: Clock,
+        roles: ["ADMIN", "HR"],
       },
       {
         label: "Attendance Devices",
         path: "/devices",
         icon: Router,
+        roles: ["ADMIN", "HR"],
       },
       {
         label: "Roster Plan",
         path: "/roster-plan",
         icon: CalendarRange,
+        roles: ["ADMIN", "HR"],
       },
       {
         label: "Weekly Roster",
         path: "/weekly-roster",
         icon: CalendarDaysIcon,
+        roles: ["ADMIN", "HR"],
       },
       {
         label: "Daily Attendance",
         path: "/daily-attendance",
         icon: ClipboardCheck,
+        roles: ["ADMIN", "HR"],
       },
       {
         label: "Monthly Attendance",
         path: "/monthly-attendance",
         icon: CalendarRange,
+        roles: ["ADMIN", "HR"],
       },
       {
         label: "Holidays",
         path: "/holidays",
         icon: CalendarDays,
+        roles: ["ADMIN", "HR"],
       },
       {
         label: "Job Card",
         path: "/job-card",
         icon: FileBarChart,
+        roles: ["ADMIN", "HR"],
       },
     ],
   },
   {
     title: "LEAVE",
+    roles: ["ADMIN", "HR"],
     items: [
       {
         label: "Leave Management",
         path: "/leaves",
         icon: CalendarOff,
+        roles: ["ADMIN", "HR"],
       },
     ],
   },
   {
     title: "PAYROLL & REPORTS",
+    roles: ["ADMIN", "HR", "ACCOUNTS"],
     items: [
-      { label: "Payroll", path: "/payroll", icon: Wallet },
-      { label: "Advance & Loan", path: "/advances", icon: HandCoins },
-      { label: "Reports", path: "/reports", icon: FileBarChart },
-      { label: "Expenses", path: "/expenses", icon: Receipt },
-      { label: "Payment History", path: "/payment-history", icon: History },
+      {
+        label: "Payroll",
+        path: "/payroll",
+        icon: Wallet,
+        roles: ["ADMIN", "HR", "ACCOUNTS"],
+      },
+      {
+        label: "Advance & Loan",
+        path: "/advances",
+        icon: HandCoins,
+        roles: ["ADMIN", "HR", "ACCOUNTS"],
+      },
+      {
+        label: "Reports",
+        path: "/reports",
+        icon: FileBarChart,
+        roles: ["ADMIN", "HR", "ACCOUNTS"],
+      },
+      {
+        label: "Expenses",
+        path: "/expenses",
+        icon: Receipt,
+        roles: ["ADMIN", "HR", "ACCOUNTS"],
+      },
+      {
+        label: "Payment History",
+        path: "/payment-history",
+        icon: History,
+        roles: ["ADMIN", "HR", "ACCOUNTS"],
+      },
     ],
   },
   {
     title: "ADMINISTRATION",
-    adminOnly: true,
+    roles: ["ADMIN"],
     items: [
-      { label: "Users & Roles", path: "/users", icon: ShieldCheck },
+      {
+        label: "Users & Roles",
+        path: "/users",
+        icon: ShieldCheck,
+        roles: ["ADMIN"],
+      },
       { label: "Companies", path: "/companies", icon: Factory },
-      { label: "Company Access", path: "/company-access", icon: Network },
-      { label: "Audit Logs", path: "/audit-logs", icon: ClipboardList },
+      {
+        label: "Company Access",
+        path: "/company-access",
+        icon: Network,
+        roles: ["ADMIN"],
+      },
+      {
+        label: "Audit Logs",
+        path: "/audit-logs",
+        icon: ClipboardList,
+        roles: ["ADMIN"],
+      },
     ],
   },
 ];
 
 const Sidebar = ({ open, onClose }) => {
   const role = useAppSelector((s) => s.auth.user?.role);
-  const groups = menuGroups.map((g) => ({ ...g, items: g.items.filter((item) => (!g.adminOnly && !item.adminOnly) || role === "ADMIN") })).filter((g) => g.items.length > 0);
-
+  // const groups = menuGroups.map((g) => ({ ...g, items: g.items.filter((item) => (!g.adminOnly && !item.adminOnly) || role === "ADMIN") })).filter((g) => g.items.length > 0);
+  const groups = menuGroups
+    .map((g) => ({
+      ...g,
+      items: g.items.filter(
+        (item) =>
+          role === "ADMIN" || // অ্যাডমিন সব দেখে
+          (g.roles.includes(role) && item.roles.includes(role)),
+      ),
+    }))
+    .filter((g) => g.items.length > 0); // খালি গ্রুপ বাদ
   return (
     <>
       {open && (
