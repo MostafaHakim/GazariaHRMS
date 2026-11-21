@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Wallet, RefreshCw, FileSpreadsheet, Lock, Unlock, CheckCircle2, Trash2, Search,
-  AlertTriangle, Loader2, RotateCcw, Users, Banknote, Smartphone, PauseCircle, X,
+  AlertTriangle, Loader2, RotateCcw, Users, Banknote, Smartphone, PauseCircle, X, Printer,
 } from "lucide-react";
 
 import { useAppDispatch } from "../hooks/useAppDispatch";
@@ -22,6 +22,79 @@ const NO_SECTION = "No Section";
 // সেকশন ফাঁকা হলে "No Section"; তুলনা হয় বড়/ছোট হাতের তফাত ছাড়া (সার্ভারের নিয়মের মতো)
 const sectionOf = (l) => String(l.section || "").trim() || NO_SECTION;
 const sectionKey = (l) => sectionOf(l).toLowerCase();
+
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const monthTitle = (m) => {
+  const [y, mo] = m.split("-").map(Number);
+  return `${MONTH_NAMES[mo - 1]} ${y}`;
+};
+
+const SUM_KEYS = ["basicSalary", "salaryPayable", "otDayHours", "otNightHours", "otHours", "otAmount", "ot20", "attBonus", "nightAllowance", "prevAdjAddition", "prevAdjDeduction", "advance", "loanDeduction", "netPayable"];
+const sumKeys = (list) => Object.fromEntries(SUM_KEYS.map((k) => [k, list.reduce((s, l) => s + (Number(l[k]) || 0), 0)]));
+
+// লাইনগুলো সেকশন ধরে ভাগ (ক্রম আগে থেকেই সার্ভারে সাজানো)
+const groupBySection = (list) => {
+  const map = new Map();
+  for (const l of list) {
+    const k = sectionKey(l);
+    if (!map.has(k)) map.set(k, { name: sectionOf(l), rows: [] });
+    map.get(k).rows.push(l);
+  }
+  return [...map.values()];
+};
+
+const esc = (v) => String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// A4 প্রিন্ট: লুকানো iframe এ টেবিল বানিয়ে প্রিন্ট ডায়ালগ খোলে (পপআপ ব্লক হয় না)।
+// columns: [[লেবেল, "l"|"c"|"r"]]; blocks: [{ heading, rows: [[...]], total: [...], grand: [...] }]
+const printDocument = ({ company, title, subtitle, columns, blocks, pageBreak = false }) => {
+  const head = `<tr>${columns.map(([h]) => `<th>${esc(h)}</th>`).join("")}</tr>`;
+  const line = (r, cls = "") => `<tr class="${cls}">${r.map((v, i) => `<td class="${columns[i][1]}">${esc(v)}</td>`).join("")}</tr>`;
+  const body = blocks
+    .map((b, bi) => `
+      <section style="${pageBreak && bi < blocks.length - 1 ? "page-break-after:always" : ""}">
+        ${b.heading ? `<h3>${esc(b.heading)}</h3>` : ""}
+        <table><thead>${head}</thead><tbody>
+          ${b.rows.map((r) => line(r)).join("")}
+          ${b.total ? line(b.total, "tot") : ""}
+          ${b.grand ? line(b.grand, "tot grand") : ""}
+        </tbody></table>
+      </section>`)
+    .join("");
+
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title>
+    <style>
+      @page { size: A4 landscape; margin: 8mm; }
+      * { box-sizing: border-box; }
+      body { font-family: Calibri, Arial, sans-serif; color: #111; margin: 0; }
+      .hd { text-align: center; margin-bottom: 6px; }
+      .hd h1 { margin: 0; font-size: 16px; color: #1F4E78; }
+      .hd h2 { margin: 2px 0 0; font-size: 12px; }
+      .hd p { margin: 2px 0 0; font-size: 10px; color: #555; }
+      h3 { margin: 8px 0 4px; font-size: 11px; color: #1F4E78; }
+      table { width: 100%; border-collapse: collapse; font-size: 8px; }
+      thead { display: table-header-group; }
+      tr { page-break-inside: avoid; }
+      th { background: #1F4E78; color: #fff; border: 1px solid #777; padding: 3px 2px; font-weight: 600; }
+      td { border: 1px solid #999; padding: 2px 3px; }
+      .l { text-align: left; } .c { text-align: center; } .r { text-align: right; }
+      tr.tot td { background: #D9E1F2; font-weight: 700; }
+      tr.grand td { background: #BDD0EA; }
+    </style></head><body>
+    <div class="hd"><h1>${esc(company)}</h1><h2>${esc(title)}</h2><p>${esc(subtitle)}</p></div>
+    ${body}</body></html>`;
+
+  const iframe = document.createElement("iframe");
+  iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0";
+  document.body.appendChild(iframe);
+  const win = iframe.contentWindow;
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
+  win.onafterprint = () => iframe.remove();
+  setTimeout(() => { win.focus(); win.print(); }, 250);
+  setTimeout(() => iframe.remove(), 120000);
+};
 
 const STATUS_STYLE = {
   DRAFT: "bg-amber-100 text-amber-800",
@@ -75,13 +148,14 @@ const Payroll = () => {
   const { run, lines, summary, loading, working, error, message } = useAppSelector((s) => s.payroll);
   const user = useAppSelector((s) => s.auth.user);
   const activeCompanyId = useAppSelector((s) => s.company.activeCompanyId);
+  const companyName = useAppSelector((s) => s.company.companies.find((c) => String(c._id) === String(s.company.activeCompanyId))?.name);
 
   const [month, setMonth] = useState(currentMonth());
   const [tab, setTab] = useState("sheet");
   const [section, setSection] = useState("");
   const [search, setSearch] = useState("");
   const [reviewOnly, setReviewOnly] = useState(false);
-  const [exporting, setExporting] = useState(false);
+  const [busy, setBusy] = useState(""); // কোন এক্সপোর্ট চলছে তার কী
   const [groupReport, setGroupReport] = useState(null);
   const [groupLoading, setGroupLoading] = useState(false);
 
@@ -113,10 +187,18 @@ const Payroll = () => {
     });
   }, [lines, section, search, reviewOnly]);
 
-  const totals = useMemo(() => {
-    const keys = ["basicSalary", "salaryPayable", "otDayHours", "otNightHours", "otHours", "otAmount", "ot20", "attBonus", "nightAllowance", "prevAdjAddition", "prevAdjDeduction", "advance", "loanDeduction", "netPayable"];
-    return Object.fromEntries(keys.map((k) => [k, visible.reduce((s, l) => s + (Number(l[k]) || 0), 0)]));
-  }, [visible]);
+  const totals = useMemo(() => sumKeys(visible), [visible]);
+
+  // বাছা সেকশনের লাইন/সামারি (Payment List ও Section Summary ট্যাবের জন্য)
+  const sectionLines = useMemo(
+    () => (section ? lines.filter((l) => sectionKey(l) === section.toLowerCase()) : lines),
+    [lines, section],
+  );
+  const summaryRows = useMemo(
+    () => (summary?.sections || []).filter((d) => !section || d.section.toLowerCase() === section.toLowerCase()),
+    [summary, section],
+  );
+  const summaryTotals = useMemo(() => sumKeys(summaryRows), [summaryRows]);
 
   const save = (line, patch) => dispatch(updatePayrollLine({ id: line._id, data: patch, month }));
   const manual = (l, f) => l.manualFields?.includes(f);
@@ -138,27 +220,111 @@ const Payroll = () => {
     }
   };
 
-  const handleExport = async () => {
+  // type/method দিয়ে Excel এর নির্দিষ্ট অংশ নামায়; বাছা সেকশন থাকলে শুধু সেটার
+  const download = async (key, params, fallbackName) => {
     try {
-      setExporting(true);
+      setBusy(key);
       const res = await api.get("/payroll/export", {
-        params: { month, ...(section ? { sections: section } : {}) },
+        params: { month, ...(section ? { sections: section } : {}), ...params },
         responseType: "blob",
       });
       const cd = res.headers["content-disposition"] || "";
-      const name = /filename="?([^"]+)"?/.exec(cd)?.[1] || `Payroll_${month}.xlsx`;
+      const name = /filename="?([^"]+)"?/.exec(cd)?.[1] || fallbackName;
       const url = URL.createObjectURL(res.data);
       const a = document.createElement("a");
       a.href = url;
       a.download = name;
       a.click();
       URL.revokeObjectURL(url);
-    } catch {
-      window.alert("Export failed");
+    } catch (err) {
+      let msg = "Export failed";
+      try { msg = JSON.parse(await err.response.data.text()).message || msg; } catch { /* ignore */ }
+      window.alert(msg);
     } finally {
-      setExporting(false);
+      setBusy("");
     }
   };
+  const handleExport = () => download("all", {}, `Payroll_${month}.xlsx`);
+
+  const printBase = (title) => ({
+    company: companyName || "Payroll",
+    title: `${title} — ${monthTitle(month)}`,
+    subtitle: `${section ? `Section: ${section}` : "All sections"}${run ? ` · Status: ${run.status}` : ""}`,
+  });
+
+  const printSheet = () => {
+    const blocks = groupBySection(visible).map((g) => {
+      const t = sumKeys(g.rows);
+      return {
+        heading: `Section: ${g.name}`,
+        rows: g.rows.map((l, i) => [
+          i + 1, l.employeeId, l.name, l.designation, l.monthDays, l.present, l.absent, l.leave, l.late, l.whDays, l.night, l.payableDays,
+          money(l.basicSalary), money(l.salaryPayable), num(l.otDayHours), num(l.otNightHours), num(l.otHours), money(l.otAmount), money(l.ot20),
+          money(l.attBonus), money(l.nightAllowance), money(l.prevAdjAddition), money(l.prevAdjDeduction), money(l.advance),
+          l.loanDeduction > 0 ? money(l.loanDeduction) : "-", money(l.netPayable), l.method, l.remarks || "",
+        ]),
+        total: ["", "", `TOTAL (${g.rows.length})`, ...Array(9).fill(""), money(t.basicSalary), money(t.salaryPayable), num(t.otDayHours), num(t.otNightHours), num(t.otHours), money(t.otAmount), money(t.ot20), money(t.attBonus), money(t.nightAllowance), money(t.prevAdjAddition), money(t.prevAdjDeduction), money(t.advance), money(t.loanDeduction), money(t.netPayable), "", ""],
+      };
+    });
+    if (blocks.length > 1) {
+      blocks[blocks.length - 1].grand = ["", "", `GRAND TOTAL (${visible.length})`, ...Array(9).fill(""), money(totals.basicSalary), money(totals.salaryPayable), num(totals.otDayHours), num(totals.otNightHours), num(totals.otHours), money(totals.otAmount), money(totals.ot20), money(totals.attBonus), money(totals.nightAllowance), money(totals.prevAdjAddition), money(totals.prevAdjDeduction), money(totals.advance), money(totals.loanDeduction), money(totals.netPayable), "", ""];
+    }
+    printDocument({
+      ...printBase("Payroll Sheet"),
+      pageBreak: true,
+      columns: [["SL", "c"], ["ID", "c"], ["Name", "l"], ["Designation", "l"], ["Month Days", "c"], ["Present", "c"], ["Absent", "c"], ["Leave", "c"], ["Late", "c"], ["WH Days", "c"], ["Night", "c"], ["Payable Days", "c"],
+        ["Basic Salary", "r"], ["Salary Payable", "r"], ["OT (Day) Hrs", "c"], ["OT (Night) Hrs", "c"], ["OT Hrs", "c"], ["OT Amount", "r"], ["OT 20%", "r"], ["Att. Bonus", "r"], ["Night Allow.", "r"],
+        ["Prev. Adj. Add", "r"], ["Prev. Adj. Ded", "r"], ["Advance", "r"], ["Adv/Loan Inst.", "r"], ["Net Payable", "r"], ["Method", "c"], ["Remarks", "l"]],
+      blocks,
+    });
+  };
+
+  const printSummary = () => {
+    const t = sumKeys(summaryRows);
+    const cells = (d) => [money(d.basicSalary), money(d.salaryPayable), num(d.otDayHours), num(d.otNightHours), num(d.otHours), money(d.otAmount), money(d.ot20), money(d.attBonus), money(d.nightAllowance), money(d.prevAdjAddition), money(d.prevAdjDeduction), money(d.advance), money(d.loanDeduction), money(d.netPayable)];
+    printDocument({
+      ...printBase("Section Summary"),
+      columns: [["SL", "c"], ["Section", "l"], ["Headcount", "c"], ["Basic Salary", "r"], ["Salary Payable", "r"], ["OT (Day) Hrs", "r"], ["OT (Night) Hrs", "r"], ["OT Hrs", "r"], ["OT Amount", "r"], ["OT 20%", "r"], ["Att. Bonus", "r"], ["Night Allow.", "r"], ["Prev. Adj. Add", "r"], ["Prev. Adj. Ded", "r"], ["Advance", "r"], ["Adv/Loan Inst.", "r"], ["Net Payable", "r"]],
+      blocks: [{
+        rows: summaryRows.map((d, i) => [i + 1, d.section, d.headcount, ...cells(d)]),
+        total: ["", "GRAND TOTAL", summaryRows.reduce((s, d) => s + d.headcount, 0), ...cells(t)],
+      }],
+    });
+  };
+
+  // এক্সপোর্টের মতোই: শুধু যাদের Net Payable > 0
+  const payableOf = (m) => sectionLines.filter((l) => l.method === m && l.netPayable > 0);
+  const printPayment = (m) => {
+    const label = m === "Bkash" ? "bKash" : m;
+    const blocks = groupBySection(payableOf(m)).map((g) => ({
+      heading: `Section: ${g.name}`,
+      rows: g.rows.map((l, i) => [i + 1, l.employeeId, l.name, l.accountNumber || (m === "Cash" ? "" : "No account"), money(l.netPayable)]),
+      total: ["", "", `TOTAL (${g.rows.length})`, "", money(g.rows.reduce((s, l) => s + l.netPayable, 0))],
+    }));
+    if (blocks.length > 1) {
+      const all = payableOf(m);
+      blocks[blocks.length - 1].grand = ["", "", `GRAND TOTAL (${all.length})`, "", money(all.reduce((s, l) => s + l.netPayable, 0))];
+    }
+    printDocument({
+      ...printBase(`Payment List — ${label}`),
+      columns: [["SL", "c"], ["ID", "c"], ["Name", "l"], [m === "Bkash" ? "Wallet No" : m === "Cash" ? "Mobile / Ref" : "Account No", "c"], ["Amount", "r"]],
+      blocks,
+    });
+  };
+
+  // ছোট বাটন: Excel + Print
+  const actionBtns = ({ id, disabled, onExcel, onPrint }) => (
+    <div className="flex items-center gap-1.5">
+      <button onClick={onExcel} disabled={disabled || !!busy}
+        className="flex items-center gap-1.5 rounded-lg border bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+        {busy === id ? <Loader2 size={14} className="animate-spin" /> : <FileSpreadsheet size={14} className="text-emerald-600" />} Excel
+      </button>
+      <button onClick={onPrint} disabled={disabled}
+        className="flex items-center gap-1.5 rounded-lg border bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+        <Printer size={14} /> Print
+      </button>
+    </div>
+  );
 
   const confirmThen = (text, action) => () => window.confirm(text) && dispatch(action({ month }));
 
@@ -228,10 +394,10 @@ const Payroll = () => {
             </button>
           )}
           {run && (
-            <button onClick={handleExport} disabled={exporting}
+            <button onClick={handleExport} disabled={!!busy}
               className="flex items-center gap-2 rounded-lg border bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60">
-              {exporting ? <Loader2 size={16} className="animate-spin" /> : <FileSpreadsheet size={16} className="text-emerald-600" />}
-              {section ? `Export Excel (${section})` : "Export Excel"}
+              {busy === "all" ? <Loader2 size={16} className="animate-spin" /> : <FileSpreadsheet size={16} className="text-emerald-600" />}
+              {section ? `Export All (${section})` : "Export All"}
             </button>
           )}
           {isAdmin && run?.status === "DRAFT" && (
@@ -320,13 +486,21 @@ const Payroll = () => {
           )}
 
           {/* Tabs */}
-          <div className="flex gap-1 border-b">
+          <div className="flex flex-wrap items-center gap-1 border-b">
             {[["sheet", "Payroll Sheet"], ["dept", "Section Summary"], ["pay", "Payment List"]].map(([k, label]) => (
               <button key={k} onClick={() => setTab(k)}
                 className={`border-b-2 px-4 py-2 text-sm font-medium ${tab === k ? "border-emerald-600 text-emerald-700" : "border-transparent text-slate-500 hover:text-slate-700"}`}>
                 {label}
               </button>
             ))}
+            <div className="ml-auto flex flex-wrap items-center gap-2 pb-1">
+              <select value={section} onChange={(e) => setSection(e.target.value)} className="rounded-lg border px-3 py-1.5 text-sm">
+                <option value="">All sections</option>
+                {sections.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+              {tab === "sheet" && actionBtns({ id: "sheet", disabled: visible.length === 0, onExcel: () => download("sheet", { type: "sheet" }, `Payroll_Sheet_Only_${month}.xlsx`), onPrint: printSheet })}
+              {tab === "dept" && actionBtns({ id: "summary", disabled: summaryRows.length === 0, onExcel: () => download("summary", { type: "summary" }, `Section_Summary_${month}.xlsx`), onPrint: printSummary })}
+            </div>
           </div>
 
           {/* ---------- Payroll Sheet ---------- */}
@@ -338,10 +512,6 @@ const Payroll = () => {
                   <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search ID or name"
                     className="w-56 rounded-lg border py-2 pl-9 pr-3 text-sm outline-none focus:border-emerald-500" />
                 </div>
-                <select value={section} onChange={(e) => setSection(e.target.value)} className="rounded-lg border px-3 py-2 text-sm">
-                  <option value="">All sections</option>
-                  {sections.map((s) => <option key={s} value={s}>{s}</option>)}
-                </select>
                 <label className="flex items-center gap-2 text-sm text-slate-600">
                   <input type="checkbox" checked={reviewOnly} onChange={(e) => setReviewOnly(e.target.checked)} /> Needs review
                 </label>
@@ -472,7 +642,7 @@ const Payroll = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {summary.sections.map((d, i) => (
+                  {summaryRows.map((d, i) => (
                     <tr key={d.section} className="hover:bg-slate-50">
                       <td className={td}>{i + 1}</td>
                       <td className={`${td} text-left font-medium`}>{d.section}</td>
@@ -486,9 +656,9 @@ const Payroll = () => {
                   <tr className="bg-[#D9E1F2] font-bold">
                     <td className={td} />
                     <td className={`${td} text-left`}>GRAND TOTAL</td>
-                    <td className={td}>{summary.totals.headcount}</td>
+                    <td className={td}>{summaryRows.reduce((s, d) => s + d.headcount, 0)}</td>
                     {["basicSalary", "salaryPayable", "otDayHours", "otNightHours", "otHours", "otAmount", "ot20", "attBonus", "nightAllowance", "prevAdjAddition", "prevAdjDeduction", "advance", "loanDeduction", "netPayable"].map((k) => (
-                      <td key={k} className={`${td} text-right`}>{["otDayHours", "otNightHours", "otHours"].includes(k) ? num(summary.totals[k]) : money(summary.totals[k])}</td>
+                      <td key={k} className={`${td} text-right`}>{["otDayHours", "otNightHours", "otHours"].includes(k) ? num(summaryTotals[k]) : money(summaryTotals[k])}</td>
                     ))}
                   </tr>
                 </tbody>
@@ -500,13 +670,21 @@ const Payroll = () => {
           {tab === "pay" && (
             <div className="grid gap-4 lg:grid-cols-2">
               {METHODS.map((m) => {
-                const list = lines.filter((l) => l.method === m);
+                const list = sectionLines.filter((l) => l.method === m);
                 const sum = list.reduce((s, l) => s + l.netPayable, 0);
                 return (
                   <div key={m} className="rounded-xl border bg-white">
                     <div className="flex items-center justify-between border-b px-4 py-3">
                       <h3 className="font-semibold text-slate-800">{m === "Bkash" ? "bKash" : m} <span className="text-xs font-normal text-slate-500">({list.length})</span></h3>
-                      <span className="text-sm font-bold text-emerald-700">৳ {money(sum)}</span>
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm font-bold text-emerald-700">৳ {money(sum)}</span>
+                        {actionBtns({
+                          id: `pay-${m}`,
+                          disabled: payableOf(m).length === 0,
+                          onExcel: () => download(`pay-${m}`, { type: "payment", method: m }, `Payment_${m}_${month}.xlsx`),
+                          onPrint: () => printPayment(m),
+                        })}
+                      </div>
                     </div>
                     <div className="max-h-80 overflow-auto">
                       <table className="min-w-full text-xs">

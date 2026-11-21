@@ -9,7 +9,7 @@ const {
   sectionName,
   sectionKey,
 } = require("../services/payrollService");
-const { buildWorkbook, exportFileName } = require("../services/payrollExportService");
+const { buildWorkbook, exportFileName, PAYMENT_ORDER } = require("../services/payrollExportService");
 const { createPayrollPaymentRecords } = require("../services/payrollPaymentService");
 const { writeAudit } = require("../services/auditService");
 const {
@@ -225,8 +225,28 @@ exports.exportExcel = async (req, res, next) => {
     const scopeNames = [...new Set(exportLines.map(sectionName))];
     const scope = wanted.length ? scopeNames.join(", ") : "";
 
-    const workbook = await buildWorkbook(month, exportLines, { scope });
-    const baseName = exportFileName(month);
+    // কোন অংশ এক্সপোর্ট: full (ডিফল্ট) | sheet | summary | payment[&method=Bkash|Bank|Cash|Hold]
+    const type = String(req.query.type || "full");
+    const method = String(req.query.method || "");
+    if (!["full", "sheet", "summary", "payment"].includes(type)) {
+      return res.status(400).json({ success: false, message: "Invalid export type" });
+    }
+    if (method && (type !== "payment" || !PAYMENT_ORDER.includes(method))) {
+      return res.status(400).json({ success: false, message: "Invalid payment method" });
+    }
+    if (type === "payment") {
+      const pay = exportLines.filter((l) => (!method || l.method === method) && l.netPayable > 0);
+      if (!pay.length) {
+        return res.status(404).json({
+          success: false,
+          message: method ? `${method} তালিকায় কোনো পেমেন্ট নেই` : "কোনো পেমেন্ট নেই",
+        });
+      }
+    }
+
+    const workbook = await buildWorkbook(month, exportLines, { scope, type, method });
+    const part = { full: "Payroll_Sheet", sheet: "Payroll_Sheet_Only", summary: "Section_Summary", payment: method ? `Payment_${method}` : "Payment_List" }[type];
+    const baseName = exportFileName(month, part);
     // Content-Disposition এ শুধু ASCII চলে; বাংলা নাম হলে ফাইলনামে সাধারণ লেবেল বসে
     const safe = (v) => v.replace(/[^\w-]+/g, "_").replace(/^_+|_+$/g, "");
     const suffix = !wanted.length

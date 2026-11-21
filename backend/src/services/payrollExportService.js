@@ -13,9 +13,10 @@ const monthLabel = (month) => {
 // scope = কোন সেকশন(গুলো) এক্সপোর্ট হচ্ছে (খালি = সব সেকশন)
 const titleOf = (month, scope = "") =>
   `Payroll Sheet  — ${monthLabel(month)}${scope ? `  (Section: ${scope})` : ""}`;
-const exportFileName = (month) => {
+// part: ফাইলের নামের শুরু (খালি = পুরো Payroll Sheet ওয়ার্কবুক)
+const exportFileName = (month, part = "Payroll_Sheet") => {
   const [y, m] = month.split("-").map(Number);
-  return `Payroll_Sheet_${MONTHS[m - 1].slice(0, 3)}_${String(y).slice(2)}.xlsx`;
+  return `${part}_${MONTHS[m - 1].slice(0, 3)}_${String(y).slice(2)}.xlsx`;
 };
 
 const NAVY = "FF1F4E78";
@@ -238,7 +239,8 @@ const buildTopSheet = (wb, month, lines, range, scope) => {
   styleHeader(head);
 
   const { sections, totals } = buildSummary(lines);
-  const src = (c) => `'Payroll Summary'!$${c}$${range.first}:$${c}$${range.last}`;
+  // range থাকলে Payroll Summary শিট থেকে লাইভ SUMIF; একা এক্সপোর্টে (range নেই) সরাসরি মান বসে
+  const src = (c) => `'Payroll Summary'!$${c}$${range?.first}:$${c}$${range?.last}`;
   // কলাম ম্যাপ: TOP কলাম -> Payroll Summary কলাম
   const map = [["D", "basicSalary", "N"], ["E", "salaryPayable", "O"], ["F", "otDayHours", "P"], ["G", "otNightHours", "Q"], ["H", "otHours", "R"],
     ["I", "otAmount", "S"], ["J", "ot20", "T"], ["K", "attBonus", "U"], ["L", "nightAllowance", "V"], ["M", "prevAdjAddition", "W"],
@@ -249,9 +251,9 @@ const buildTopSheet = (wb, month, lines, range, scope) => {
     const row = ws.getRow(r);
     row.getCell(1).value = i + 1;
     row.getCell(2).value = d.section;
-    row.getCell(3).value = { formula: `COUNTIF(${src("B")},$B${r})`, result: d.headcount };
+    row.getCell(3).value = range ? { formula: `COUNTIF(${src("B")},$B${r})`, result: d.headcount } : d.headcount;
     map.forEach(([tc, key, sc]) => {
-      row.getCell(tc).value = { formula: `SUMIF(${src("B")},$B${r},${src(sc)})`, result: d[key] };
+      row.getCell(tc).value = range ? { formula: `SUMIF(${src("B")},$B${r},${src(sc)})`, result: d[key] } : d[key];
       row.getCell(tc).numFmt = ["F", "G", "H"].includes(tc) ? "0" : "#,##0.00";
     });
     for (let c = 1; c <= heads.length; c++) {
@@ -322,6 +324,15 @@ const buildPaymentSheet = (wb, month, lines, method, sheetName, accountLabel, sc
   }
 };
 
+// পেমেন্ট লিস্ট: মেথড -> [শিটের নাম, অ্যাকাউন্ট কলামের লেবেল]
+const PAYMENT_ORDER = ["Bkash", "Bank", "Cash", "Hold"];
+const PAYMENT_SHEETS = {
+  Bkash: ["BKASH", "Wallet No"],
+  Bank: ["BANK", "Account No"],
+  Cash: ["CASH", "Mobile / Ref"],
+  Hold: ["HOLD", "Account No"],
+};
+
 // শিটের "Advance" কলামে হাতের অ্যাডভান্স + Advance/Loan কিস্তি একসাথে দেখায় (ফর্মুলা একই থাকে);
 // কোন কিস্তি তা Remarks এ লেখা হয়।
 const withLoanInAdvance = (l) => {
@@ -344,13 +355,22 @@ const buildWorkbook = async (month, rawLines, opts = {}) => {
   wb.creator = COMPANY;
   wb.created = new Date();
 
-  const range = buildSummarySheet(wb, month, lines, scope);
-  buildReportSheet(wb, month, lines, scope);
-  buildTopSheet(wb, month, lines, range, scope);
-  buildPaymentSheet(wb, month, lines, "Bkash", "BKASH", "Wallet No", scope);
-  buildPaymentSheet(wb, month, lines, "Bank", "BANK", "Account No", scope);
-  buildPaymentSheet(wb, month, lines, "Cash", "CASH", "Mobile / Ref", scope);
+  // type: full (সব শিট) | sheet (শুধু Payroll Summary) | summary (শুধু সেকশন সামারি) | payment (পেমেন্ট লিস্ট; method দিলে একটি)
+  const type = opts.type || "full";
+  if (type === "sheet") {
+    buildSummarySheet(wb, month, lines, scope);
+  } else if (type === "summary") {
+    buildTopSheet(wb, month, lines, null, scope);
+  } else if (type === "payment") {
+    const methods = opts.method ? [opts.method] : PAYMENT_ORDER;
+    methods.forEach((m) => buildPaymentSheet(wb, month, lines, m, PAYMENT_SHEETS[m][0], PAYMENT_SHEETS[m][1], scope));
+  } else {
+    const range = buildSummarySheet(wb, month, lines, scope);
+    buildReportSheet(wb, month, lines, scope);
+    buildTopSheet(wb, month, lines, range, scope);
+    PAYMENT_ORDER.forEach((m) => buildPaymentSheet(wb, month, lines, m, PAYMENT_SHEETS[m][0], PAYMENT_SHEETS[m][1], scope));
+  }
   return wb;
 };
 
-module.exports = { buildWorkbook, exportFileName };
+module.exports = { buildWorkbook, exportFileName, PAYMENT_ORDER };
