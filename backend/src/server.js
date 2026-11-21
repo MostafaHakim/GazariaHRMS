@@ -70,6 +70,23 @@ app.use(
 
 app.use(express.json({ limit: "2mb" }));
 
+// Vercel (serverless): প্রতিটি রিকোয়েস্টের আগে DB কানেকশন নিশ্চিত করা (cached) + একবার bootstrap
+let bootstrapped = false;
+app.use(async (req, res, next) => {
+  try {
+    await connectDB();
+    if (!bootstrapped) {
+      await ensureInitialCompanies();
+      await ensureInitialAdmin();
+      bootstrapped = true;
+    }
+    next();
+  } catch (err) {
+    console.error("DB init failed:", err.message);
+    res.status(503).json({ success: false, message: "Database সংযোগ হয়নি, আবার চেষ্টা করুন" });
+  }
+});
+
 // ZKTeco ADMS sends plain-text/tab-separated payloads, not JSON.
 app.use("/iclock", express.text({ type: "*/*", limit: "5mb" }), admsRoutes);
 
@@ -125,30 +142,29 @@ app.use("/api/payroll", requireCompany, payrollRoutes);
 // Error Handler — must be after routes
 app.use(errorMiddleware);
 
-// Start Server
+// Local / নিজস্ব সার্ভারে চালালে: listen + cron (Vercel-এ এগুলো চলে না)
+if (!process.env.VERCEL) {
+  (async () => {
+    try {
+      getSecret(); // JWT_SECRET না থাকলে এখানেই থেমে যাবে
+      await connectDB();
+      await ensureInitialCompanies();
+      await ensureInitialAdmin();
+      bootstrapped = true;
 
-const startServer = async () => {
-  try {
-    getSecret(); // JWT_SECRET না থাকলে এখানেই থেমে যাবে
-    await connectDB();
-    await ensureInitialCompanies();
-    await ensureInitialAdmin();
-
-    // app.listen(PORT, "0.0.0.0", () => {
-    //   console.log(`Gazaria HRMS running on port ${PORT}`);
-    //   // Start background jobs after server is up
-    //   try {
-    //     startCronJobs();
-    //   } catch (cronErr) {
-    //     console.error("Cron start failed:", cronErr.message);
-    //   }
-    // });
-  } catch (error) {
-    console.error("Server startup failed:", error.message);
-    process.exit(1);
-  }
-};
-
-startServer();
+      app.listen(PORT, "0.0.0.0", () => {
+        console.log(`Gazaria HRMS running on port ${PORT}`);
+        try {
+          startCronJobs();
+        } catch (cronErr) {
+          console.error("Cron start failed:", cronErr.message);
+        }
+      });
+    } catch (error) {
+      console.error("Server startup failed:", error.message);
+      process.exit(1);
+    }
+  })();
+}
 
 module.exports = app;

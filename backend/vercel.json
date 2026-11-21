@@ -4,16 +4,9 @@
     {
       "src": "/src/server.js",
       "use": "@vercel/node",
-      "config": {
-        "memory": 512,
-        "maxDuration": 10
-      }
+      "config": { "memory": 1024, "maxDuration": 60 }
     }
   ],
-  "routes": [
-    {
-      "src": "/(.*)",
-      "dest": "/src/server.js"
-    }
-  ]
+  "routes": [{ "src": "/(.*)", "dest": "/src/server.js" }],
+  "regions": ["sin1"]
 }

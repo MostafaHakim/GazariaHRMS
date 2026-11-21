@@ -249,16 +249,84 @@ const calculateDailyAttendance = async (dateString, options = {}) => {
   let leaveCount = 0;
   let skipped = 0;
 
-  for (const entry of roster.entries) {
-    if (onlyEmployeeIds && !onlyEmployeeIds.has(String(entry.employee))) {
-      continue;
-    }
+  // ===== Bulk preload: কর্মী-প্রতি আলাদা কোয়েরির বদলে একবারেই সব আনা (Vercel-এ দ্রুত চলার জন্য) =====
+  const Shift = require("../models/Shift");
+  const entries = roster.entries.filter(
+    (e) => !onlyEmployeeIds || onlyEmployeeIds.has(String(e.employee)),
+  );
 
-    const employee = await Employee.findOne({
-      _id: entry.employee,
-      ...(options.companyId ? { company: options.companyId } : {}),
-      isDeleted: { $ne: true },
-    });
+  const employees = await Employee.find({
+    _id: { $in: entries.map((e) => e.employee) },
+    company: options.companyId,
+    isDeleted: { $ne: true },
+  });
+  const employeeMap = new Map(employees.map((e) => [String(e._id), e]));
+
+  // populate না হওয়া শিফট (startTime নেই) একবারেই আনা
+  const missingShiftIds = new Set();
+  for (const e of entries) {
+    const ov = (e.dayOverrides || []).find(
+      (o) => o.date && new Date(o.date).getTime() === attendanceDate.getTime(),
+    );
+    const s = ov?.shift || e.shift;
+    if (s && !s.startTime) missingShiftIds.add(String(s._id || s));
+  }
+  const shiftMap = new Map();
+  if (missingShiftIds.size) {
+    const shs = await Shift.find({ _id: { $in: [...missingShiftIds] } });
+    for (const s of shs) shiftMap.set(String(s._id), s);
+  }
+
+  // সব কর্মীর লগ একটি কোয়েরিতে (সব শিফটের সম্ভাব্য সীমা ধরে), পরে মেমোরিতে ভাগ করা
+  const DAY = 24 * 60 * 60 * 1000;
+  const windowStart = new Date(attendanceDate.getTime() - 12 * 60 * 60 * 1000);
+  const windowEnd = new Date(attendanceDate.getTime() + 2 * DAY);
+  const allLogs = await AttendanceLog.find({
+    company: options.companyId,
+    recordTime: { $gte: windowStart, $lte: windowEnd },
+  })
+    .sort({ recordTime: 1 })
+    .lean();
+  const logsByDeviceUser = new Map(); // "deviceId|userId" -> logs
+  const logsByUser = new Map(); // "userId" -> logs (deviceMapping না থাকলে)
+  for (const l of allLogs) {
+    const uid = String(l.deviceUserId || "").trim();
+    const k = `${String(l.deviceId || "").trim()}|${uid}`;
+    if (!logsByDeviceUser.has(k)) logsByDeviceUser.set(k, []);
+    logsByDeviceUser.get(k).push(l);
+    if (!logsByUser.has(uid)) logsByUser.set(uid, []);
+    logsByUser.get(uid).push(l);
+  }
+  const pickLogs = (employee, from, to) => {
+    const mappings = (employee.deviceMappings || []).filter((m) => m.deviceId && m.deviceUserId);
+    let pool = [];
+    if (mappings.length) {
+      for (const m of mappings) {
+        pool.push(...(logsByDeviceUser.get(`${String(m.deviceId).trim()}|${String(m.deviceUserId).trim()}`) || []));
+      }
+    } else {
+      const empId = String(employee.employeeId || "").trim();
+      if (empId) pool = logsByUser.get(empId) || [];
+    }
+    return pool
+      .filter((l) => l.recordTime >= from && l.recordTime <= to)
+      .sort((a, b) => a.recordTime - b.recordTime);
+  };
+
+  // ম্যানুয়ালি এডিট করা রেকর্ড একবারেই আনা
+  const existing = await DailyAttendance.find({
+    company: options.companyId,
+    attendanceDate,
+    employee: { $in: employees.map((e) => e._id) },
+  })
+    .select("employee isManuallyEdited")
+    .lean();
+  const manualSet = new Set(existing.filter((x) => x.isManuallyEdited).map((x) => String(x.employee)));
+
+  const writeOps = [];
+
+  for (const entry of entries) {
+    const employee = employeeMap.get(String(entry.employee));
 
     if (!employee) {
       skipped++;
@@ -279,8 +347,7 @@ const calculateDailyAttendance = async (dateString, options = {}) => {
     let shift = dayOverride?.shift || entry.shift;
 
     if (shift && !shift.startTime) {
-      const Shift = require("../models/Shift");
-      shift = await Shift.findById(shift._id || shift);
+      shift = shiftMap.get(String(shift._id || shift)) || null;
     }
 
     if (!shift || !shift.isActive) {
@@ -303,7 +370,7 @@ const calculateDailyAttendance = async (dateString, options = {}) => {
     const logStart = new Date(shiftStart.getTime() - 4 * 60 * 60 * 1000);
     const logEnd = new Date(shiftEnd.getTime() + 6 * 60 * 60 * 1000);
 
-    const rawLogs = await findEmployeeLogs(employee, logStart, logEnd);
+    const rawLogs = pickLogs(employee, logStart, logEnd);
     const dedupedLogs = dedupeLogs(rawLogs);
 
     const hasMapping =
@@ -412,57 +479,48 @@ const calculateDailyAttendance = async (dateString, options = {}) => {
       }
     }
 
-    const existingAttendance = await DailyAttendance.findOne({
-      company: employee.company,
-      employee: employee._id,
-      attendanceDate,
-    });
-
-    if (existingAttendance?.isManuallyEdited) {
+    if (manualSet.has(String(employee._id))) {
       skipped++;
       continue;
     }
 
-    const result = await DailyAttendance.updateOne(
-      {
-        company: employee.company,
-        employee: employee._id,
-        attendanceDate,
-      },
-      {
-        $set: {
+    writeOps.push({
+      updateOne: {
+        filter: {
           company: employee.company,
-          employeeId: employee.employeeId,
-          employeeName: employee.name,
-          shift: shift._id,
-          shiftCode: shift.code,
-          shiftStart,
-          shiftEnd,
-          firstIn,
-          lastOut,
-          punchCount: dedupedLogs.length,
-          scheduledMinutes,
-          breakMinutes,
-          workedMinutes,
-          netWorkedMinutes,
-          lateMinutes,
-          earlyLeaveMinutes,
-          overtimeMinutes,
-          status,
-          sourceLogs: dedupedLogs.map((log) => log._id),
-          remarks: dayOverride
-            ? [remarks, `Mid-week shift: ${shift.code}`].filter(Boolean).join(" | ")
-            : remarks,
-          calculatedAt: new Date(),
+          employee: employee._id,
+          attendanceDate,
         },
+        update: {
+          $set: {
+            company: employee.company,
+            employeeId: employee.employeeId,
+            employeeName: employee.name,
+            shift: shift._id,
+            shiftCode: shift.code,
+            shiftStart,
+            shiftEnd,
+            firstIn,
+            lastOut,
+            punchCount: dedupedLogs.length,
+            scheduledMinutes,
+            breakMinutes,
+            workedMinutes,
+            netWorkedMinutes,
+            lateMinutes,
+            earlyLeaveMinutes,
+            overtimeMinutes,
+            status,
+            sourceLogs: dedupedLogs.map((log) => log._id),
+            remarks: dayOverride
+              ? [remarks, `Mid-week shift: ${shift.code}`].filter(Boolean).join(" | ")
+              : remarks,
+            calculatedAt: new Date(),
+          },
+        },
+        upsert: true,
       },
-      { upsert: true },
-    );
-
-    if (result.matchedCount === 0 && result.upsertedCount === 0) {
-      skipped++;
-      continue;
-    }
+    });
 
     processed++;
 
@@ -473,6 +531,10 @@ const calculateDailyAttendance = async (dateString, options = {}) => {
     else if (status === "WEEKLY_OFF") weeklyOff++;
     else if (status === "HOLIDAY") holidayCount++;
     else if (status === "LEAVE") leaveCount++;
+  }
+
+  if (writeOps.length) {
+    await DailyAttendance.bulkWrite(writeOps, { ordered: false });
   }
 
   return {
