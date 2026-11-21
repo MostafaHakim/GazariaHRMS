@@ -18,6 +18,10 @@ const currentMonth = () =>
 const money = (n) => Number(n || 0).toLocaleString("en-US", { maximumFractionDigits: 0 });
 const num = (n) => (Number(n) ? Number(n).toLocaleString("en-US", { maximumFractionDigits: 2 }) : "0");
 const METHODS = ["Bkash", "Bank", "Cash", "Hold"];
+const NO_SECTION = "No Section";
+// সেকশন ফাঁকা হলে "No Section"; তুলনা হয় বড়/ছোট হাতের তফাত ছাড়া (সার্ভারের নিয়মের মতো)
+const sectionOf = (l) => String(l.section || "").trim() || NO_SECTION;
+const sectionKey = (l) => sectionOf(l).toLowerCase();
 
 const STATUS_STYLE = {
   DRAFT: "bg-amber-100 text-amber-800",
@@ -74,7 +78,7 @@ const Payroll = () => {
 
   const [month, setMonth] = useState(currentMonth());
   const [tab, setTab] = useState("sheet");
-  const [department, setDepartment] = useState("");
+  const [section, setSection] = useState("");
   const [search, setSearch] = useState("");
   const [reviewOnly, setReviewOnly] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -97,17 +101,17 @@ const Payroll = () => {
 
   const needsReview = (l) => l.incompleteDays > 0 || l.missingDays > 0 || !(l.basicSalary > 0);
 
-  const departments = useMemo(() => summary?.departments?.map((d) => d.department) || [], [summary]);
+  const sections = useMemo(() => summary?.sections?.map((s) => s.section) || [], [summary]);
 
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
     return lines.filter((l) => {
-      if (department && l.department !== department) return false;
+      if (section && sectionKey(l) !== section.toLowerCase()) return false;
       if (reviewOnly && !needsReview(l)) return false;
       if (q && !(String(l.employeeId).toLowerCase().includes(q) || l.name.toLowerCase().includes(q))) return false;
       return true;
     });
-  }, [lines, department, search, reviewOnly]);
+  }, [lines, section, search, reviewOnly]);
 
   const totals = useMemo(() => {
     const keys = ["basicSalary", "salaryPayable", "otDayHours", "otNightHours", "otHours", "otAmount", "ot20", "attBonus", "nightAllowance", "prevAdjAddition", "prevAdjDeduction", "advance", "loanDeduction", "netPayable"];
@@ -138,7 +142,7 @@ const Payroll = () => {
     try {
       setExporting(true);
       const res = await api.get("/payroll/export", {
-        params: { month, ...(department ? { departments: department } : {}) },
+        params: { month, ...(section ? { sections: section } : {}) },
         responseType: "blob",
       });
       const cd = res.headers["content-disposition"] || "";
@@ -227,7 +231,7 @@ const Payroll = () => {
             <button onClick={handleExport} disabled={exporting}
               className="flex items-center gap-2 rounded-lg border bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60">
               {exporting ? <Loader2 size={16} className="animate-spin" /> : <FileSpreadsheet size={16} className="text-emerald-600" />}
-              {department ? `Export Excel (${department})` : "Export Excel"}
+              {section ? `Export Excel (${section})` : "Export Excel"}
             </button>
           )}
           {isAdmin && run?.status === "DRAFT" && (
@@ -309,9 +313,15 @@ const Payroll = () => {
             </div>
           )}
 
+          {sections.length === 1 && sections[0] === NO_SECTION && (
+            <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm text-blue-900">
+              কোনো কর্মীর Section দেওয়া নেই, তাই সবাই “No Section” এ আছে। Employees পেজে কর্মীর Section লিখলে (অথবা Excel import-এ <b>section</b> কলাম দিলে) এখানে সেকশন ধরে ভাগ হবে।
+            </div>
+          )}
+
           {/* Tabs */}
           <div className="flex gap-1 border-b">
-            {[["sheet", "Payroll Sheet"], ["dept", "Department Summary"], ["pay", "Payment List"]].map(([k, label]) => (
+            {[["sheet", "Payroll Sheet"], ["dept", "Section Summary"], ["pay", "Payment List"]].map(([k, label]) => (
               <button key={k} onClick={() => setTab(k)}
                 className={`border-b-2 px-4 py-2 text-sm font-medium ${tab === k ? "border-emerald-600 text-emerald-700" : "border-transparent text-slate-500 hover:text-slate-700"}`}>
                 {label}
@@ -328,9 +338,9 @@ const Payroll = () => {
                   <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search ID or name"
                     className="w-56 rounded-lg border py-2 pl-9 pr-3 text-sm outline-none focus:border-emerald-500" />
                 </div>
-                <select value={department} onChange={(e) => setDepartment(e.target.value)} className="rounded-lg border px-3 py-2 text-sm">
-                  <option value="">All departments</option>
-                  {departments.map((d) => <option key={d} value={d}>{d}</option>)}
+                <select value={section} onChange={(e) => setSection(e.target.value)} className="rounded-lg border px-3 py-2 text-sm">
+                  <option value="">All sections</option>
+                  {sections.map((s) => <option key={s} value={s}>{s}</option>)}
                 </select>
                 <label className="flex items-center gap-2 text-sm text-slate-600">
                   <input type="checkbox" checked={reviewOnly} onChange={(e) => setReviewOnly(e.target.checked)} /> Needs review
@@ -345,7 +355,7 @@ const Payroll = () => {
                 <table className="min-w-max border-collapse">
                   <thead className="sticky top-0 z-20">
                     <tr>
-                      {["SL", "Department", "ID", "Name", "Designation", "Month Days", "Present", "Absent", "Leave", "Late", "WH Days", "Night", "Payable Days",
+                      {["SL", "Section", "ID", "Name", "Designation", "Month Days", "Present", "Absent", "Leave", "Late", "WH Days", "Night", "Payable Days",
                         "Basic Salary", "Salary Payable", "OT (Day) Hours", "OT (Night) Hours", "OT Hours", "OT Amount", "OT 20%", "Att. Bonus", "Night Allowance",
                         "Prev. Adj. Addition", "Prev. Adj. Deduction", "Advance", "Adv/Loan Inst.", "Net Payable", "Method", "BKASH/BANK Account", "Remarks", ""].map((h, i) => (
                         <th key={i} className={`${th} ${i === 3 ? "sticky left-0 z-30" : ""}`}>{h}</th>
@@ -358,7 +368,7 @@ const Payroll = () => {
                       return (
                         <tr key={l._id} className={l.method === "Hold" ? "bg-amber-50/60" : "hover:bg-slate-50"}>
                           <td className={td}>{l.sl}</td>
-                          <td className={`${td} whitespace-nowrap text-left`}>{l.department}</td>
+                          <td className={`${td} whitespace-nowrap text-left`}>{sectionOf(l)}</td>
                           <td className={td}>{l.employeeId}</td>
                           <td className={`${td} sticky left-0 z-10 whitespace-nowrap bg-white text-left font-medium`}>
                             {l.name}
@@ -450,22 +460,22 @@ const Payroll = () => {
             </div>
           )}
 
-          {/* ---------- Department Summary (TOP_SHEET) ---------- */}
+          {/* ---------- Section Summary (TOP_SHEET) ---------- */}
           {tab === "dept" && (
             <div className="overflow-auto rounded-xl border bg-white">
               <table className="min-w-full border-collapse">
                 <thead>
                   <tr>
-                    {["SL", "Department", "Headcount", "Basic Salary", "Salary Payable", "OT (Day) Hrs", "OT (Night) Hrs", "OT Hrs", "OT Amount", "OT 20%", "Att. Bonus", "Night Allowance", "Prev. Adj. Add", "Prev. Adj. Ded", "Advance", "Adv/Loan Inst.", "Net Payable"].map((h) => (
+                    {["SL", "Section", "Headcount", "Basic Salary", "Salary Payable", "OT (Day) Hrs", "OT (Night) Hrs", "OT Hrs", "OT Amount", "OT 20%", "Att. Bonus", "Night Allowance", "Prev. Adj. Add", "Prev. Adj. Ded", "Advance", "Adv/Loan Inst.", "Net Payable"].map((h) => (
                       <th key={h} className={th}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {summary.departments.map((d, i) => (
-                    <tr key={d.department} className="hover:bg-slate-50">
+                  {summary.sections.map((d, i) => (
+                    <tr key={d.section} className="hover:bg-slate-50">
                       <td className={td}>{i + 1}</td>
-                      <td className={`${td} text-left font-medium`}>{d.department}</td>
+                      <td className={`${td} text-left font-medium`}>{d.section}</td>
                       <td className={td}>{d.headcount}</td>
                       {["basicSalary", "salaryPayable", "otDayHours", "otNightHours", "otHours", "otAmount", "ot20", "attBonus", "nightAllowance", "prevAdjAddition", "prevAdjDeduction", "advance", "loanDeduction"].map((k) => (
                         <td key={k} className={`${td} text-right`}>{["otDayHours", "otNightHours", "otHours"].includes(k) ? num(d[k]) : money(d[k])}</td>

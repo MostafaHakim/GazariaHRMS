@@ -198,23 +198,51 @@ const recompute = (line) => {
   return line;
 };
 
-// ডিপার্টমেন্ট সাজানোর ক্রম (শিটের মতো)
-const deptRank = (name) => {
-  const i = cfg.DEPARTMENT_ORDER.findIndex(
-    (d) => d.toLowerCase() === String(name || "").trim().toLowerCase(),
-  );
+// -------- সেকশন-ভিত্তিক গ্রুপিং --------
+// পেরোল শিট এখন সেকশন (Employee.section) ধরে সাজানো/গ্রুপ হয়; Department শুধু বেতনের নিয়মে
+// (Att. Bonus / OT 20% বাদ) লাগে, গ্রুপিংয়ে নয়। সেকশন ফাঁকা থাকলে "No Section" ধরা হয়।
+const NO_SECTION = "No Section";
+const sectionName = (l) => String(l.section || "").trim() || NO_SECTION;
+// বড়/ছোট হাতের তফাত ও বাড়তি স্পেস উপেক্ষা করে একই সেকশন চেনার চাবি
+const sectionKey = (l) => sectionName(l).toLowerCase();
+
+const naturalCompare = (a, b) =>
+  String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
+
+// সাজানোর ক্রম: কনফিগে নাম থাকলে সেই ক্রমে (শিটের মতো), বাকিগুলো নামের ক্রমে, "No Section" সবার শেষে
+const sectionRank = (name) => {
+  if (name === NO_SECTION) return 2000;
+  const i = cfg.DEPARTMENT_ORDER.findIndex((d) => d.toLowerCase() === String(name).trim().toLowerCase());
   return i === -1 ? 1000 : i;
+};
+const compareSections = (a, b) => {
+  const ra = sectionRank(a);
+  const rb = sectionRank(b);
+  return ra !== rb ? ra - rb : naturalCompare(a, b);
+};
+
+// পুরনো পেরোল লাইনে সেকশন স্ন্যাপশট ফাঁকা থাকতে পারে (সেকশন যোগ হওয়ার আগে বানানো, বা কর্মীর সেকশন পরে বসানো)।
+// তাই দেখানো/এক্সপোর্টের সময় ফাঁকা লাইনগুলোর সেকশন কর্মীর বর্তমান সেকশন থেকে ভরা হয় (ডাটাবেসে বদলায় না)।
+// স্ন্যাপশটে সেকশন থাকলে সেটাই থাকে, ফলে পুরনো পেরোলের ইতিহাস ঠিক থাকে।
+const fillMissingSections = async (lines, companyId) => {
+  const missing = lines.filter((l) => !String(l.section || "").trim());
+  if (!missing.length) return lines;
+  const emps = await Employee.find({
+    company: companyId,
+    _id: { $in: missing.map((l) => l.employee) },
+  })
+    .select("section")
+    .lean();
+  const byId = new Map(emps.map((e) => [String(e._id), String(e.section || "").trim()]));
+  return lines.map((l) =>
+    String(l.section || "").trim() ? l : { ...l, section: byId.get(String(l.employee)) || "" },
+  );
 };
 
 const sortLines = (lines) =>
   [...lines].sort((a, b) => {
-    const ra = deptRank(a.department);
-    const rb = deptRank(b.department);
-    if (ra !== rb) return ra - rb;
-    if (ra === 1000 && a.department !== b.department) {
-      return String(a.department).localeCompare(String(b.department));
-    }
-    return String(a.employeeId).localeCompare(String(b.employeeId), undefined, { numeric: true });
+    if (sectionKey(a) !== sectionKey(b)) return compareSections(sectionName(a), sectionName(b));
+    return naturalCompare(a.employeeId, b.employeeId);
   });
 
 // -------- Generate / Regenerate (শুধু DRAFT) --------
@@ -385,14 +413,15 @@ const SUM_KEYS = [
 const emptyTotals = () => Object.fromEntries(SUM_KEYS.map((k) => [k, 0]));
 
 const buildSummary = (lines) => {
-  const byDept = new Map();
+  const bySection = new Map();
   const totals = { ...emptyTotals(), headcount: 0 };
 
   for (const l of lines) {
-    let d = byDept.get(l.department);
+    const key = sectionKey(l);
+    let d = bySection.get(key);
     if (!d) {
-      d = { department: l.department, headcount: 0, ...emptyTotals() };
-      byDept.set(l.department, d);
+      d = { section: sectionName(l), headcount: 0, ...emptyTotals() };
+      bySection.set(key, d);
     }
     d.headcount++;
     totals.headcount++;
@@ -402,11 +431,7 @@ const buildSummary = (lines) => {
     }
   }
 
-  const departments = [...byDept.values()].sort((a, b) => {
-    const ra = deptRank(a.department);
-    const rb = deptRank(b.department);
-    return ra !== rb ? ra - rb : String(a.department).localeCompare(String(b.department));
-  });
+  const sections = [...bySection.values()].sort((a, b) => compareSections(a.section, b.section));
 
   const hold = lines.filter((l) => l.method === "Hold");
   const methods = {};
@@ -416,7 +441,7 @@ const buildSummary = (lines) => {
   }
 
   return {
-    departments,
+    sections,
     totals,
     methods,
     holdAmount: hold.reduce((s, l) => s + l.netPayable, 0),
@@ -435,6 +460,10 @@ module.exports = {
   updateLine,
   buildSummary,
   sortLines,
+  fillMissingSections,
+  sectionName,
+  sectionKey,
+  NO_SECTION,
   monthRange,
   AUTO_FIELDS,
   INPUT_FIELDS,

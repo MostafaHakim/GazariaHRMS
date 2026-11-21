@@ -1,15 +1,18 @@
 const ExcelJS = require("exceljs");
 const cfg = require("../config/payrollConfig");
-const { buildSummary } = require("./payrollService");
+const { buildSummary, sectionName, sectionKey } = require("./payrollService");
 
 const COMPANY = process.env.COMPANY_NAME || "Gazaria Elastic Industries Limited";
 const ADDRESS = process.env.COMPANY_ADDRESS || "Dashergaon, Lokhonkhola, Bandar, Narayanganj";
 
 const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
-const titleOf = (month) => {
+const monthLabel = (month) => {
   const [y, m] = month.split("-").map(Number);
-  return `Payroll Sheet  — ${MONTHS[m - 1]} ${y}`;
+  return `${MONTHS[m - 1]} ${y}`;
 };
+// scope = কোন সেকশন(গুলো) এক্সপোর্ট হচ্ছে (খালি = সব সেকশন)
+const titleOf = (month, scope = "") =>
+  `Payroll Sheet  — ${monthLabel(month)}${scope ? `  (Section: ${scope})` : ""}`;
 const exportFileName = (month) => {
   const [y, m] = month.split("-").map(Number);
   return `Payroll_Sheet_${MONTHS[m - 1].slice(0, 3)}_${String(y).slice(2)}.xlsx`;
@@ -28,8 +31,8 @@ const col = (n) => {
   return s;
 };
 
-const addTitle = (ws, month, lastCol) => {
-  const rows = [[COMPANY, 16, true, NAVY], [ADDRESS, 10, false, "FF595959"], [titleOf(month), 12, true, NAVY]];
+const addTitle = (ws, month, lastCol, scope = "") => {
+  const rows = [[COMPANY, 16, true, NAVY], [ADDRESS, 10, false, "FF595959"], [titleOf(month, scope), 12, true, NAVY]];
   rows.forEach(([text, size, bold, color], i) => {
     ws.mergeCells(i + 1, 1, i + 1, lastCol);
     const c = ws.getCell(i + 1, 1);
@@ -51,20 +54,20 @@ const styleHeader = (row, fill = NAVY) => {
 
 // ---------- 1) Payroll Summary (ফর্মুলা সহ, শিটের মতো) ----------
 const HEAD = [
-  "SL", "Department", "ID", "Name", "Designation", "Month Days", "Present", "Absent", "Leave", "Late",
+  "SL", "Section", "ID", "Name", "Designation", "Month Days", "Present", "Absent", "Leave", "Late",
   "WH Days", "Night", "Payable Days", "Basic Salary", "Salary Payable", "OT (Day) Hours", "OT (Night) Hours",
   "OT  Hours", "OT Amount", "OT 20%", "Att. Bonus", "Night Allowance", "Previous Adjustment Addition",
   "Previous Adjustment Deduction", "Advance", "Net Payable", "Method", "BKASH/BANK\nACCOUNT NUMBER ", "Remarks",
 ];
-const WIDTH = [4.5, 12, 8, 20, 14, 6, 6.5, 6.5, 6, 5.5, 6.5, 6, 8, 9, 9.5, 8, 8, 7, 9, 8, 9, 9, 11, 11, 8.5, 10.5, 8, 15, 28];
+const WIDTH = [4.5, 14, 8, 20, 14, 6, 6.5, 6.5, 6, 5.5, 6.5, 6, 8, 9, 9.5, 8, 8, 7, 9, 8, 9, 9, 11, 11, 8.5, 10.5, 8, 15, 28];
 
-const buildSummarySheet = (wb, month, lines) => {
+const buildSummarySheet = (wb, month, lines, scope) => {
   const ws = wb.addWorksheet("Payroll Summary", {
     views: [{ state: "frozen", xSplit: 4, ySplit: 4 }],
     pageSetup: { orientation: "landscape", paperSize: 9, fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
   });
   ws.columns = WIDTH.map((width) => ({ width }));
-  addTitle(ws, month, 26);
+  addTitle(ws, month, 26, scope);
 
   const head = ws.getRow(4);
   HEAD.forEach((h, i) => (head.getCell(i + 1).value = h));
@@ -78,10 +81,11 @@ const buildSummarySheet = (wb, month, lines) => {
     const row = ws.getRow(r);
     const f = (c, formula, result) => (row.getCell(c).value = { formula, result });
     const D = cfg.OT_DAY_DIVISOR, N = cfg.OT_NIGHT_DIVISOR;
+    // Att. Bonus / OT 20% বাদ দেওয়ার নিয়ম ডিপার্টমেন্ট ধরেই চলে (payrollConfig)
     const dept = String(l.department).trim().toLowerCase();
 
     row.getCell(1).value = l.sl;
-    row.getCell(2).value = l.department;
+    row.getCell(2).value = sectionName(l);
     row.getCell(3).value = asIdValue(l.employeeId);
     row.getCell(4).value = l.name;
     row.getCell(5).value = l.designation;
@@ -147,8 +151,8 @@ const buildSummarySheet = (wb, month, lines) => {
   return { first, last };
 };
 
-// ---------- 2) Report (ডিপার্টমেন্ট-ওয়াইজ, প্রতি ডিপার্টমেন্ট আলাদা পাতা) ----------
-const buildReportSheet = (wb, month, lines) => {
+// ---------- 2) Report (সেকশন-ওয়াইজ, প্রতি সেকশন আলাদা পাতা) ----------
+const buildReportSheet = (wb, month, lines, scope) => {
   const ws = wb.addWorksheet("Report", {
     pageSetup: { orientation: "landscape", paperSize: 9, fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
   });
@@ -164,14 +168,19 @@ const buildReportSheet = (wb, month, lines) => {
     "nightAllowance", "prevAdjAddition", "prevAdjDeduction", "advance", "netPayable"];
   const sumFrom = 13; // Basic Salary থেকে ডানে
 
-  addTitle(ws, month, cols.length);
+  addTitle(ws, month, cols.length, scope);
   let r = 4;
-  const depts = [...new Set(lines.map((l) => l.department))];
+  // lines আগেই সেকশন ক্রমে সাজানো; এখানে শুধু সেকশন ধরে ভাগ করা হয়
+  const groups = new Map();
+  for (const l of lines) {
+    const k = sectionKey(l);
+    if (!groups.has(k)) groups.set(k, { name: sectionName(l), rows: [] });
+    groups.get(k).rows.push(l);
+  }
 
-  depts.forEach((dept, di) => {
-    const group = lines.filter((l) => l.department === dept);
+  [...groups.values()].forEach(({ name: dept, rows: group }, di) => {
     if (di > 0) ws.getRow(r - 1).addPageBreak();
-    ws.getCell(r, 1).value = `Department: ${dept}`;
+    ws.getCell(r, 1).value = `Section: ${dept}`;
     ws.getCell(r, 1).font = { name: "Calibri", size: 11, bold: true, color: { argb: NAVY } };
     r++;
     const head = ws.getRow(r);
@@ -212,23 +221,23 @@ const buildReportSheet = (wb, month, lines) => {
   });
 };
 
-// ---------- 3) TOP_SHEET (ডিপার্টমেন্ট সামারি, Payroll Summary থেকে লাইভ SUMIF) ----------
-const buildTopSheet = (wb, month, lines, range) => {
+// ---------- 3) TOP_SHEET (সেকশন সামারি, Payroll Summary থেকে লাইভ SUMIF) ----------
+const buildTopSheet = (wb, month, lines, range, scope) => {
   const ws = wb.addWorksheet("TOP_SHEET", {
     pageSetup: { orientation: "landscape", paperSize: 9, fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
   });
-  const heads = ["SL", "Department Name", "Headcount", "Basic Salary", "Salary Payable", "OT (Day) Hours", "OT (Night) Hours", "OT Hours", "OT Amount",
+  const heads = ["SL", "Section Name", "Headcount", "Basic Salary", "Salary Payable", "OT (Day) Hours", "OT (Night) Hours", "OT Hours", "OT Amount",
     "OT 20%", "Att. Bonus", "Night Allowance", "Previous Adjustment Addition", "Previous Adjustment Deduction", "Advance", "Net Payable"];
   ws.columns = [5, 20, 10, 13, 13, 11, 11, 10, 12, 11, 11, 12, 15, 15, 11, 14].map((width) => ({ width }));
-  addTitle(ws, month, heads.length);
-  ws.getCell(3, 1).value = `Summary of Payroll Sheet  — ${titleOf(month).split("— ")[1]}`;
+  addTitle(ws, month, heads.length, scope);
+  ws.getCell(3, 1).value = `Summary of Payroll Sheet  — ${monthLabel(month)}${scope ? `  (Section: ${scope})` : ""}`;
 
   const head = ws.getRow(5);
   heads.forEach((h, i) => (head.getCell(i + 1).value = h));
   head.height = 36.75;
   styleHeader(head);
 
-  const { departments, totals } = buildSummary(lines);
+  const { sections, totals } = buildSummary(lines);
   const src = (c) => `'Payroll Summary'!$${c}$${range.first}:$${c}$${range.last}`;
   // কলাম ম্যাপ: TOP কলাম -> Payroll Summary কলাম
   const map = [["D", "basicSalary", "N"], ["E", "salaryPayable", "O"], ["F", "otDayHours", "P"], ["G", "otNightHours", "Q"], ["H", "otHours", "R"],
@@ -236,10 +245,10 @@ const buildTopSheet = (wb, month, lines, range) => {
     ["N", "prevAdjDeduction", "X"], ["O", "advance", "Y"], ["P", "netPayable", "Z"]];
 
   let r = 6;
-  departments.forEach((d, i) => {
+  sections.forEach((d, i) => {
     const row = ws.getRow(r);
     row.getCell(1).value = i + 1;
-    row.getCell(2).value = d.department;
+    row.getCell(2).value = d.section;
     row.getCell(3).value = { formula: `COUNTIF(${src("B")},$B${r})`, result: d.headcount };
     map.forEach(([tc, key, sc]) => {
       row.getCell(tc).value = { formula: `SUMIF(${src("B")},$B${r},${src(sc)})`, result: d[key] };
@@ -271,13 +280,13 @@ const buildTopSheet = (wb, month, lines, range) => {
 };
 
 // ---------- 4) BKASH / BANK / CASH পেমেন্ট লিস্ট ----------
-const buildPaymentSheet = (wb, month, lines, method, sheetName, accountLabel) => {
+const buildPaymentSheet = (wb, month, lines, method, sheetName, accountLabel, scope) => {
   const list = lines.filter((l) => l.method === method && l.netPayable > 0);
   if (!list.length && method !== "Bkash") return;
 
   const ws = wb.addWorksheet(sheetName);
   ws.columns = [{ width: 10 }, { width: 20 }, { width: 18 }, { width: 24 }, { width: 12 }];
-  addTitle(ws, month, 5);
+  addTitle(ws, month, 5, scope);
   ws.getCell(4, 1).value = method;
   ws.getCell(4, 1).font = { name: "Calibri", size: 11, bold: true };
 
@@ -327,18 +336,20 @@ const withLoanInAdvance = (l) => {
   };
 };
 
-const buildWorkbook = async (month, rawLines) => {
+// opts.scope: এক্সপোর্ট করা সেকশনের নাম (শিটের টাইটেলে দেখায়); খালি = সব সেকশন
+const buildWorkbook = async (month, rawLines, opts = {}) => {
+  const scope = opts.scope || "";
   const lines = rawLines.map(withLoanInAdvance);
   const wb = new ExcelJS.Workbook();
   wb.creator = COMPANY;
   wb.created = new Date();
 
-  const range = buildSummarySheet(wb, month, lines);
-  buildReportSheet(wb, month, lines);
-  buildTopSheet(wb, month, lines, range);
-  buildPaymentSheet(wb, month, lines, "Bkash", "BKASH", "Wallet No");
-  buildPaymentSheet(wb, month, lines, "Bank", "BANK", "Account No");
-  buildPaymentSheet(wb, month, lines, "Cash", "CASH", "Mobile / Ref");
+  const range = buildSummarySheet(wb, month, lines, scope);
+  buildReportSheet(wb, month, lines, scope);
+  buildTopSheet(wb, month, lines, range, scope);
+  buildPaymentSheet(wb, month, lines, "Bkash", "BKASH", "Wallet No", scope);
+  buildPaymentSheet(wb, month, lines, "Bank", "BANK", "Account No", scope);
+  buildPaymentSheet(wb, month, lines, "Cash", "CASH", "Mobile / Ref", scope);
   return wb;
 };
 

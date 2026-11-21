@@ -5,6 +5,9 @@ const {
   updateLine,
   buildSummary,
   sortLines,
+  fillMissingSections,
+  sectionName,
+  sectionKey,
 } = require("../services/payrollService");
 const { buildWorkbook, exportFileName } = require("../services/payrollExportService");
 const { createPayrollPaymentRecords } = require("../services/payrollPaymentService");
@@ -34,7 +37,8 @@ const loadRunWithLines = async (month, companyId) => {
     .lean();
   if (!run) return { run: null, lines: [] };
 
-  const lines = sortLines(await PayrollLine.find({ company: companyId, run: run._id }).lean()).map(
+  const rawLines = await PayrollLine.find({ company: companyId, run: run._id }).lean();
+  const lines = sortLines(await fillMissingSections(rawLines, companyId)).map(
     (l, i) => ({ ...l, sl: i + 1 }),
   );
   return { run, lines };
@@ -184,7 +188,7 @@ exports.removeRun = async (req, res, next) => {
   }
 };
 
-// GET /api/payroll/export?month=YYYY-MM  → .xlsx (Payroll Summary, Report, TOP_SHEET, BKASH ...)
+// GET /api/payroll/export?month=YYYY-MM[&sections=A,B]  → .xlsx (Payroll Summary, Report, TOP_SHEET, BKASH ...)
 exports.exportExcel = async (req, res, next) => {
   try {
     const { month } = req.query;
@@ -198,15 +202,15 @@ exports.exportExcel = async (req, res, next) => {
       });
     }
 
-    // সেকশন (ডিপার্টমেন্ট) ফিল্টার: ?departments=Needle,Crochet  (খালি = সব)
-    const rawFilter = String(req.query.departments || req.query.department || "");
+    // সেকশন ফিল্টার: ?sections=Covering,Needle  (খালি = সব সেকশন; "No Section" = সেকশন ফাঁকা কর্মীরা)
+    const rawFilter = String(req.query.sections || req.query.section || "");
     const wanted = rawFilter
       .split(",")
       .map((x) => x.trim().toLowerCase())
       .filter(Boolean);
     const exportLines = wanted.length
       ? lines
-          .filter((l) => wanted.includes(String(l.department || "").trim().toLowerCase()))
+          .filter((l) => wanted.includes(sectionKey(l)))
           .map((l, i) => ({ ...l, sl: i + 1 }))
       : lines;
 
@@ -217,13 +221,19 @@ exports.exportExcel = async (req, res, next) => {
       });
     }
 
-    const workbook = await buildWorkbook(month, exportLines);
+    // শিটের টাইটেলে দেখানোর নাম (একাধিক হলে সবগুলোর নাম, ক্রম বজায় রেখে)
+    const scopeNames = [...new Set(exportLines.map(sectionName))];
+    const scope = wanted.length ? scopeNames.join(", ") : "";
+
+    const workbook = await buildWorkbook(month, exportLines, { scope });
     const baseName = exportFileName(month);
-    const suffix = wanted.length
-      ? wanted.length === 1
-        ? rawFilter.trim().replace(/[^\w-]+/g, "_")
-        : "Selected"
-      : "";
+    // Content-Disposition এ শুধু ASCII চলে; বাংলা নাম হলে ফাইলনামে সাধারণ লেবেল বসে
+    const safe = (v) => v.replace(/[^\w-]+/g, "_").replace(/^_+|_+$/g, "");
+    const suffix = !wanted.length
+      ? ""
+      : scopeNames.length === 1
+        ? safe(scopeNames[0]) || "Section"
+        : "Selected_Sections";
     const fileName = suffix ? baseName.replace(".xlsx", `_${suffix}.xlsx`) : baseName;
     res.setHeader(
       "Content-Type",
