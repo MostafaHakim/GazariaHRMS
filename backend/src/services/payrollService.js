@@ -37,7 +37,10 @@ const loadAttendanceStats = async (month, companyId, employeeIds = null) => {
   const DAY = 24 * 60 * 60 * 1000;
   const filter = {
     company: companyId,
-    attendanceDate: { $gte: new Date(start.getTime() - DAY), $lt: new Date(end.getTime() + DAY) },
+    attendanceDate: {
+      $gte: new Date(start.getTime() - cfg.HOLIDAY_SCAN_DAYS * DAY),
+      $lt: new Date(end.getTime() + cfg.HOLIDAY_SCAN_DAYS * DAY),
+    },
   };
   if (employeeIds) filter.employee = { $in: employeeIds };
 
@@ -68,6 +71,19 @@ const loadAttendanceStats = async (month, companyId, employeeIds = null) => {
     return false;
   };
 
+  // হলিডের আগে/পরের "কর্মদিবস" খোঁজা: WEEKLY_OFF/HOLIDAY দিন বাদ দিয়ে প্রথম দিনটি।
+  // সেই দিন Absent হলে true, উপস্থিত হলে false, তথ্য না থাকলে (মাসের বাইরে/সীমার বাইরে) null
+  const workingDayAbsent = (empId, date, dir) => {
+    for (let i = 1; i <= cfg.HOLIDAY_SCAN_DAYS; i++) {
+      const d = new Date(date.getTime() + dir * i * DAY);
+      const r = byEmpDay.get(`${empId}|${dayKey(d)}`);
+      if (!r) return d >= start && d < end ? true : null;
+      if (r.status === "WEEKLY_OFF" || r.status === "HOLIDAY") continue;
+      return isAbsentDay(empId, d);
+    }
+    return null;
+  };
+
   const nightById = new Map(shifts.map((s) => [String(s._id), !!s.isNightShift]));
   const nightByCode = new Map(shifts.map((s) => [s.code, !!s.isNightShift]));
   const stats = new Map();
@@ -79,7 +95,7 @@ const loadAttendanceStats = async (month, companyId, employeeIds = null) => {
       s = {
         recorded: 0, present: 0, late: 0, absent: 0, incomplete: 0,
         weeklyOff: 0, holiday: 0, leave: 0, unpaidLeave: 0,
-        night: 0, otDayMin: 0, otNightMin: 0, sandwich: 0,
+        night: 0, otDayMin: 0, otNightMin: 0, sandwich: 0, holidaySandwich: 0,
       };
       stats.set(key, s);
     }
@@ -112,7 +128,23 @@ const loadAttendanceStats = async (month, companyId, employeeIds = null) => {
         }
         break;
       }
-      case "HOLIDAY": s.holiday++; break;
+      case "HOLIDAY": {
+        // হলিডের আগের ও পরের কর্মদিবস দুটোই Absent হলে এই হলিডে Absent গণ্য (বেতন নেই)
+        const d = new Date(r.attendanceDate);
+        const worked = (r.punchCount || 0) >= 2 || (r.overtimeMinutes || 0) > 0;
+        if (
+          cfg.HOLIDAY_SANDWICH_ABSENT &&
+          !worked &&
+          workingDayAbsent(key, d, -1) === true &&
+          workingDayAbsent(key, d, +1) === true
+        ) {
+          s.absent++;
+          s.holidaySandwich++;
+        } else {
+          s.holiday++;
+        }
+        break;
+      }
       case "LEAVE":
         s.leave++;
         if (/\(UNPAID\)/i.test(r.remarks || "")) s.unpaidLeave++;
@@ -133,7 +165,7 @@ const statsToAuto = (s, monthDays) => {
   const empty = !s;
   const st = s || {
     recorded: 0, present: 0, late: 0, absent: 0, incomplete: 0,
-    weeklyOff: 0, holiday: 0, leave: 0, unpaidLeave: 0, night: 0, otDayMin: 0, otNightMin: 0, sandwich: 0,
+    weeklyOff: 0, holiday: 0, leave: 0, unpaidLeave: 0, night: 0, otDayMin: 0, otNightMin: 0, sandwich: 0, holidaySandwich: 0,
   };
   const missingDays = Math.max(0, monthDays - st.recorded);
   const unpaid = cfg.UNPAID_LEAVE_AS_ABSENT ? st.unpaidLeave : 0;
@@ -148,6 +180,7 @@ const statsToAuto = (s, monthDays) => {
     otNightHours: round2(st.otNightMin / 60),
     incompleteDays: st.incomplete,
     sandwichDays: st.sandwich,
+    holidaySandwichDays: st.holidaySandwich,
     missingDays,
     noAttendance: empty,
   };

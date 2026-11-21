@@ -20,6 +20,10 @@ module.exports = {
   UNPAID_LEAVE_AS_ABSENT: true,
   // স্যান্ডউইচ নিয়ম: বৃহস্পতিবার বা শনিবার Absent থাকলে শুক্রবারও Absent গণ্য (সাপ্তাহিক ছুটির বেতন নেই)।
   // শুক্রবার কাজ করলে (২+ পাঞ্চ বা OT) এই নিয়ম খাটে না। বন্ধ করতে .env এ PAYROLL_FRIDAY_SANDWICH=false
+  // হলিডে স্যান্ডউইচ: হলিডের (বা টানা ছুটির) আগের কর্মদিবস ও পরের কর্মদিবস দুটোই Absent হলে ওই হলিডে Absent গণ্য।
+  // বন্ধ করতে .env এ PAYROLL_HOLIDAY_SANDWICH=false
+  HOLIDAY_SANDWICH_ABSENT: process.env.PAYROLL_HOLIDAY_SANDWICH !== "false",
+  HOLIDAY_SCAN_DAYS: 10, // টানা ছুটি (ঈদ ইত্যাদি) পার হয়ে কর্মদিবস খুঁজতে কত দিন আগে/পরে দেখবে
   FRIDAY_SANDWICH_ABSENT: process.env.PAYROLL_FRIDAY_SANDWICH !== "false",
 
   // শিটে এই ডিপার্টমেন্টগুলোর Att. Bonus ঘরে হাতে 0 বসানো (ফর্মুলা নেই) — তাই বোনাস পায় না
