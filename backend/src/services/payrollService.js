@@ -186,6 +186,10 @@ const statsToAuto = (s, monthDays) => {
   };
 };
 
+// সেকশন স্টাফদের OT নেই (পুরোনো হিসাবে OT থেকে গেলেও পেরোলে ধরা হবে না)
+const noOtFor = (emp) =>
+  cfg.OT_EXCLUDED_SECTIONS.includes(String(emp?.section || "").trim().toLowerCase());
+
 const salaryOf = (emp) => {
   const primary = Number(emp[cfg.SALARY_FIELD]) || 0;
   if (primary > 0) return primary;
@@ -307,7 +311,9 @@ const generatePayroll = async (month, userId, companyId) => {
     };
     const autoValues = {
       absent: auto.absent, leave: auto.leave, late: auto.late, whDays: auto.whDays,
-      night: auto.night, otDayHours: auto.otDayHours, otNightHours: auto.otNightHours,
+      night: auto.night,
+      otDayHours: noOtFor(emp) ? 0 : auto.otDayHours,
+      otNightHours: noOtFor(emp) ? 0 : auto.otNightHours,
       basicSalary: salaryOf(emp),
       method: emp.paymentMethod || "Cash",
       accountNumber: emp.paymentAccount || "",
@@ -354,7 +360,9 @@ const updateLine = async (lineId, body, companyId) => {
     const auto = statsToAuto(stats.get(String(line.employee)), monthDays);
     const autoValues = {
       absent: auto.absent, leave: auto.leave, late: auto.late, whDays: auto.whDays,
-      night: auto.night, otDayHours: auto.otDayHours, otNightHours: auto.otNightHours,
+      night: auto.night,
+      otDayHours: noOtFor(emp) ? 0 : auto.otDayHours,
+      otNightHours: noOtFor(emp) ? 0 : auto.otNightHours,
       basicSalary: emp ? salaryOf(emp) : line.basicSalary,
       method: emp?.paymentMethod || "Cash",
       accountNumber: emp?.paymentAccount || "",

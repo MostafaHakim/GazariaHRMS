@@ -33,6 +33,11 @@ module.exports = {
   OT20_EXCLUDED_DEPARTMENTS: (process.env.PAYROLL_OT20_EXCLUDED || "Driver")
     .split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
 
+  // এই সেকশনের (Employee.section) কর্মীদের OT নেই: বাড়তি ডিউটি, শুক্রবার বা হলিডেতে কাজ করলেও OT গণনা হয় না।
+  // বড়/ছোট হাতের তফাত ও বাড়তি স্পেস উপেক্ষা করা হয়। .env এ PAYROLL_OT_EXCLUDED_SECTIONS দিয়ে বদলানো যায় (কমা দিয়ে আলাদা)।
+  OT_EXCLUDED_SECTIONS: (process.env.PAYROLL_OT_EXCLUDED_SECTIONS || "Staff,Floor Staff")
+    .split(",").map((x) => x.trim().toLowerCase()).filter(Boolean),
+
   METHODS: ["Bkash", "Bank", "Cash", "Hold"],
   // শিটের মতো ডিপার্টমেন্ট ক্রম (বাকিগুলো নামের ক্রমে শেষে)
   DEPARTMENT_ORDER: [

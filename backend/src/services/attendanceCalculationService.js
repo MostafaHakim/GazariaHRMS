@@ -4,6 +4,11 @@ const WeeklyRoster = require("../models/WeeklyRoster");
 const Holiday = require("../models/Holiday");
 const DailyAttendance = require("../models/DailyAttendance");
 const Leave = require("../models/Leave");
+const { OT_EXCLUDED_SECTIONS } = require("../config/payrollConfig");
+const {
+  getHolidayLunchDeduction,
+  HOLIDAY_LUNCH_CUTOFF_TIME,
+} = require("./holidayLunchBreak");
 
 const BD_OFFSET_HOURS = 6;
 
@@ -85,6 +90,10 @@ const calculateOvertimeMinutes = (actualMinutes) => {
   const completedHours = Math.floor((actualMinutes + 5) / 60);
   return completedHours * 60;
 };
+
+// সেকশন স্টাফ (OT নেই) কি না
+const isOtExcluded = (employee) =>
+  OT_EXCLUDED_SECTIONS.includes(String(employee.section || "").trim().toLowerCase());
 
 const isFriday = (dateString) => {
   const { year, month, day } = getDateParts(dateString);
@@ -363,6 +372,10 @@ const calculateDailyAttendance = async (dateString, options = {}) => {
     const shiftStart = bdDateTimeToUTC(dateString, shift.startTime);
     let shiftEnd = bdDateTimeToUTC(dateString, shift.endTime);
 
+    // রাত পার হওয়া শিফট বা নাইট শিফট চিহ্নিত থাকলে নাইট ধরা হবে (হলিডে/শুক্রবারে লাঞ্চ কাটা হবে না)
+    const isNightWork = !!shift.isNightShift || shiftEnd <= shiftStart;
+    const lunchCutoff = bdDateTimeToUTC(dateString, HOLIDAY_LUNCH_CUTOFF_TIME);
+
     if (shiftEnd <= shiftStart) {
       shiftEnd = new Date(shiftEnd.getTime() + 24 * 60 * 60 * 1000);
     }
@@ -390,7 +403,7 @@ const calculateDailyAttendance = async (dateString, options = {}) => {
     const lastOut = lastLog ? lastLog.recordTime : null;
 
     const scheduledMinutes = minutesBetween(shiftStart, shiftEnd);
-    const breakMinutes = Number(shift.breakMinutes || 0);
+    let breakMinutes = Number(shift.breakMinutes || 0);
 
     let workedMinutes = 0;
     let netWorkedMinutes = 0;
@@ -407,15 +420,21 @@ const calculateDailyAttendance = async (dateString, options = {}) => {
     if (friday) {
       if (dedupedLogs.length >= 2) {
         workedMinutes = minutesBetween(firstIn, lastOut);
+        // শুক্রবার: লাঞ্চ ব্রেক কাটা (সকাল-বিকাল/রাত হলে ৬০ মিনিট; দুপুর ২টার আগে শেষ হলে বা নাইটে কাটা হবে না)
+        breakMinutes = getHolidayLunchDeduction({ firstIn, lastOut, cutoff: lunchCutoff, isNight: isNightWork });
         netWorkedMinutes = Math.max(0, workedMinutes - breakMinutes);
-        overtimeMinutes = calculateOvertimeMinutes(workedMinutes);
+        overtimeMinutes = calculateOvertimeMinutes(netWorkedMinutes);
         status = "WEEKLY_OFF";
-        remarks = "Friday weekly off — all worked time as OT";
+        remarks = breakMinutes > 0
+          ? `Friday weekly off — OT after ${breakMinutes} min lunch break`
+          : "Friday weekly off — all worked time as OT";
       } else if (dedupedLogs.length === 1) {
         status = "WEEKLY_OFF";
+        breakMinutes = 0;
         remarks = "Friday weekly off — single punch";
       } else {
         status = "WEEKLY_OFF";
+        breakMinutes = 0;
         remarks = "Friday weekly off";
       }
     }
@@ -423,19 +442,25 @@ const calculateDailyAttendance = async (dateString, options = {}) => {
     else if (applicableHoliday) {
       if (dedupedLogs.length >= 2) {
         workedMinutes = minutesBetween(firstIn, lastOut);
+        // হলিডে: শুক্রবারের মতোই লাঞ্চ ব্রেক নিয়ম
+        breakMinutes = getHolidayLunchDeduction({ firstIn, lastOut, cutoff: lunchCutoff, isNight: isNightWork });
         netWorkedMinutes = Math.max(0, workedMinutes - breakMinutes);
         if (applicableHoliday.otIfWorked !== false) {
-          overtimeMinutes = calculateOvertimeMinutes(workedMinutes);
-          remarks = `Holiday (${applicableHoliday.name}) — worked as OT`;
+          overtimeMinutes = calculateOvertimeMinutes(netWorkedMinutes);
+          remarks = breakMinutes > 0
+            ? `Holiday (${applicableHoliday.name}) — worked as OT after ${breakMinutes} min lunch break`
+            : `Holiday (${applicableHoliday.name}) — worked as OT`;
         } else {
           remarks = `Holiday (${applicableHoliday.name}) — worked`;
         }
         status = "HOLIDAY";
       } else if (dedupedLogs.length === 1) {
         status = "HOLIDAY";
+        breakMinutes = 0;
         remarks = `Holiday (${applicableHoliday.name}) — single punch`;
       } else {
         status = "HOLIDAY";
+        breakMinutes = 0;
         remarks = `Holiday: ${applicableHoliday.name}`;
       }
     }
@@ -477,6 +502,12 @@ const calculateDailyAttendance = async (dateString, options = {}) => {
           minutesBetween(shiftEnd, lastOut),
         );
       }
+    }
+
+    // সেকশন স্টাফদের OT নেই: কাজ করলেও OT শূন্য
+    if (overtimeMinutes > 0 && isOtExcluded(employee)) {
+      overtimeMinutes = 0;
+      remarks = [remarks, "No OT (section staff)"].filter(Boolean).join(" | ");
     }
 
     if (manualSet.has(String(employee._id))) {
