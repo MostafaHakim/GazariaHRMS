@@ -6,6 +6,23 @@ const {
   clearLoginFailures,
 } = require("../middleware/loginRateLimit");
 
+const Employee = require("../models/Employee");
+
+// SECURITY ইউজারকে কোন কর্মীদের পাঞ্চ দেওয়ার অনুমতি, তা যাচাই (কর্মী অবশ্যই ইউজারের company access-এর ভেতরের হতে হবে)
+const validatePunchEmployees = async (ids, companyAccess) => {
+  const mongoose = require("mongoose");
+  if (!Array.isArray(ids) || ids.length === 0) return { error: "Select at least one employee for this security user" };
+  const uniq = [...new Set(ids.map(String))];
+  if (uniq.some((id) => !mongoose.isValidObjectId(id))) return { error: "Invalid employee selection" };
+  const count = await Employee.countDocuments({
+    _id: { $in: uniq },
+    company: { $in: companyAccess },
+    isDeleted: { $ne: true },
+  });
+  if (count !== uniq.length) return { error: "One or more employees are invalid or outside the selected companies" };
+  return { ids: uniq };
+};
+
 const validateCompanyAccess = async (companyAccess, defaultCompany) => {
   if (!Array.isArray(companyAccess) || companyAccess.length === 0) {
     return "Select at least one company for this user";
@@ -120,6 +137,7 @@ exports.listUsers = async (req, res, next) => {
 exports.createUser = async (req, res, next) => {
   try {
     const { name, username, email, role, password, companyAccess, defaultCompany } = req.body;
+    let punchEmployees = [];
 
     if (!name || !username || !password) {
       return res.status(400).json({
@@ -141,7 +159,12 @@ exports.createUser = async (req, res, next) => {
       const accessError = await validateCompanyAccess(companyAccess, defaultCompany || companyAccess?.[0]);
       if (accessError) return res.status(400).json({ success: false, message: accessError });
     }
-    const user = await User.create({ name, username, email, role, password, companyAccess: role === 'ADMIN' ? [] : companyAccess, defaultCompany: role === 'ADMIN' ? null : (defaultCompany || companyAccess[0]) });
+    if (role === 'SECURITY') {
+      const r = await validatePunchEmployees(req.body.punchEmployees, companyAccess);
+      if (r.error) return res.status(400).json({ success: false, message: r.error });
+      punchEmployees = r.ids;
+    }
+    const user = await User.create({ name, username, email, role, password, punchEmployees, companyAccess: role === 'ADMIN' ? [] : companyAccess, defaultCompany: role === 'ADMIN' ? null : (defaultCompany || companyAccess[0]) });
     res.status(201).json({ success: true, user: user.toSafeJSON() });
   } catch (error) {
     next(error);
@@ -196,6 +219,14 @@ exports.updateUser = async (req, res, next) => {
       const accessError = await validateCompanyAccess(nextAccess, nextDefault);
       if (accessError) return res.status(400).json({ success: false, message: accessError });
     }
+    let nextPunch = [];
+    if (nextRole === 'SECURITY') {
+      const wanted = req.body.punchEmployees !== undefined ? req.body.punchEmployees : (user.punchEmployees || []).map(String);
+      const r = await validatePunchEmployees(wanted, nextAccess);
+      if (r.error) return res.status(400).json({ success: false, message: r.error });
+      nextPunch = r.ids;
+    }
+    user.punchEmployees = nextPunch;
     if (name !== undefined) user.name = name;
     if (email !== undefined) user.email = email;
     if (role !== undefined) user.role = role;

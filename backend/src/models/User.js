@@ -1,7 +1,8 @@
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
 
-const ROLES = ["ADMIN", "HR", "ACCOUNTS"];
+// SECURITY = আলাদা মোবাইল পাঞ্চ-অ্যাপের সিকিউরিটি/সুপারভাইজার: শুধু নির্ধারিত কর্মীদের IN/OUT দিতে ও দেখতে পারে
+const ROLES = ["ADMIN", "HR", "ACCOUNTS", "SECURITY"];
 
 const userSchema = new mongoose.Schema(
   {
@@ -28,6 +29,9 @@ const userSchema = new mongoose.Schema(
     // ADMIN = Group Admin; other roles are restricted to companyAccess.
     companyAccess: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Company' }],
     defaultCompany: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', default: null },
+
+    // শুধু SECURITY রোলের জন্য: যাদের পাঞ্চ দেওয়ার অনুমতি আছে
+    punchEmployees: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Employee' }],
 
     isActive: { type: Boolean, default: true },
     lastLoginAt: { type: Date, default: null },
@@ -58,6 +62,7 @@ userSchema.methods.toSafeJSON = function () {
     role: this.role,
     companyAccess: (this.companyAccess || []).map((id) => String(id)),
     defaultCompany: this.defaultCompany ? String(this.defaultCompany) : null,
+    punchEmployees: (this.punchEmployees || []).map((id) => String(id._id || id)),
     isActive: this.isActive,
     lastLoginAt: this.lastLoginAt,
     createdAt: this.createdAt,

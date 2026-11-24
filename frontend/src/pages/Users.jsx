@@ -10,9 +10,10 @@ const ROLES = [
   { value: "ADMIN", label: "Group Admin", hint: "Everything, incl. users & payroll finalize/paid" },
   { value: "HR", label: "HR", hint: "All HR work + payroll generate/edit" },
   { value: "ACCOUNTS", label: "Accounts", hint: "Read-only + payroll export" },
+  { value: "SECURITY", label: "Security (Punch app)", hint: "Only the mobile Punch app: gives IN / OUT for the employees selected below, cannot edit punches" },
 ];
 
-const emptyForm = { name: "", username: "", email: "", role: "HR", password: "", companyAccess: [], defaultCompany: "" };
+const emptyForm = { name: "", username: "", email: "", role: "HR", password: "", companyAccess: [], defaultCompany: "", punchEmployees: [] };
 const inputClass = "w-full rounded-lg border px-3 py-2 text-sm outline-none focus:border-emerald-500";
 
 const Users = () => {
@@ -25,6 +26,8 @@ const Users = () => {
   const [modal, setModal] = useState(null); // { mode: "create" | "edit", user? }
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
+  const [empSearch, setEmpSearch] = useState("");
+  const [empOptions, setEmpOptions] = useState([]);
 
   const [reloadKey, setReloadKey] = useState(0);
   const load = () => setReloadKey((k) => k + 1);
@@ -43,9 +46,27 @@ const Users = () => {
     };
   }, [reloadKey]);
 
-  const openCreate = () => { setForm({ ...emptyForm, companyAccess: activeCompanyId ? [activeCompanyId] : [], defaultCompany: activeCompanyId || "" }); setError(""); setModal({ mode: "create" }); };
+  // SECURITY রোলে: নির্বাচিত কোম্পানির Active কর্মীর তালিকা (বাছাইয়ের জন্য)
+  const secCompany = form.companyAccess[0] || "";
+  useEffect(() => {
+    if (!modal || form.role !== "SECURITY" || !secCompany) { setEmpOptions([]); return; }
+    let alive = true;
+    const t = setTimeout(() => {
+      api
+        .get("/users/punch-employees", { params: { company: secCompany, search: empSearch || undefined } })
+        .then(({ data }) => alive && setEmpOptions(data.employees || []))
+        .catch(() => alive && setEmpOptions([]));
+    }, 300);
+    return () => { alive = false; clearTimeout(t); };
+  }, [modal, form.role, secCompany, empSearch]);
+
+  const toggleEmp = (id) =>
+    setForm((f) => ({ ...f, punchEmployees: f.punchEmployees.includes(id) ? f.punchEmployees.filter((x) => x !== id) : [...f.punchEmployees, id] }));
+
+  const openCreate = () => { setForm({ ...emptyForm, companyAccess: activeCompanyId ? [activeCompanyId] : [], defaultCompany: activeCompanyId || "" }); setEmpSearch(""); setError(""); setModal({ mode: "create" }); };
   const openEdit = (u) => {
-    setForm({ name: u.name, username: u.username, email: u.email || "", role: u.role, password: "", isActive: u.isActive, companyAccess: u.companyAccess || [], defaultCompany: u.defaultCompany || "" });
+    setForm({ name: u.name, username: u.username, email: u.email || "", role: u.role, password: "", isActive: u.isActive, companyAccess: u.companyAccess || [], defaultCompany: u.defaultCompany || "", punchEmployees: u.punchEmployees || [] });
+    setEmpSearch("");
     setError("");
     setModal({ mode: "edit", user: u });
   };
@@ -58,7 +79,7 @@ const Users = () => {
       if (modal.mode === "create") {
         await api.post("/auth/users", form);
       } else {
-        const body = { name: form.name, email: form.email, role: form.role, isActive: form.isActive, companyAccess: form.role === "ADMIN" ? [] : form.companyAccess, defaultCompany: form.role === "ADMIN" ? null : form.defaultCompany };
+        const body = { name: form.name, email: form.email, role: form.role, isActive: form.isActive, companyAccess: form.role === "ADMIN" ? [] : form.companyAccess, defaultCompany: form.role === "ADMIN" ? null : form.defaultCompany, punchEmployees: form.role === "SECURITY" ? form.punchEmployees : undefined };
         if (form.password) body.password = form.password;
         await api.put(`/auth/users/${modal.user.id}`, body);
       }
@@ -102,7 +123,7 @@ const Users = () => {
             {loading && <tr><td colSpan={7} className="py-10 text-center text-slate-500"><Loader2 className="mr-2 inline animate-spin" size={16} />Loading...</td></tr>}
             {users.map((u) => (
               <tr key={u.id} className="border-t">
-                <td className="px-4 py-3 font-medium text-slate-800">{u.name}{u.id === me?.id && <span className="ml-2 text-xs text-slate-400">(you)</span>}</td>
+                <td className="px-4 py-3 font-medium text-slate-800">{u.name}{u.id === me?.id && <span className="ml-2 text-xs text-slate-400">(you)</span>}{u.role === "SECURITY" && <span className="ml-2 text-xs text-slate-400">· {u.punchEmployees?.length || 0} employees</span>}</td>
                 <td className="px-4 py-3 text-slate-600">{u.username}</td>
                 <td className="px-4 py-3"><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">{u.role === "ADMIN" ? "Group Admin" : u.role}</span></td>
                 <td className="px-4 py-3 text-xs text-slate-600">{u.role === "ADMIN" ? "All companies" : (u.companyAccess || []).map((id) => companies.find((company) => String(company._id) === String(id))?.name).filter(Boolean).join(", ") || "No access assigned"}</td>
@@ -144,7 +165,7 @@ const Users = () => {
                 {ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
               </select>
               <p className="mt-1 text-xs text-slate-500">{ROLES.find((r) => r.value === form.role)?.hint}</p></div>
-            {form.role !== "ADMIN" && (
+            {form.role !== "ADMIN" && form.role !== "SECURITY" && (
               <div className="space-y-3 rounded-lg border bg-slate-50 p-3">
                 <div>
                   <p className="mb-2 text-sm font-semibold text-slate-700">Company access</p>
@@ -170,6 +191,39 @@ const Users = () => {
                     <option value="">Select default company</option>
                     {companies.filter((company) => form.companyAccess.includes(String(company._id))).map((company) => <option key={company._id} value={company._id}>{company.name}</option>)}
                   </select>
+                </div>
+              </div>
+            )}
+            {form.role === "SECURITY" && (
+              <div className="space-y-3 rounded-lg border bg-slate-50 p-3">
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-slate-700">Company</label>
+                  <select className={inputClass} value={secCompany}
+                    onChange={(e) => setForm({ ...form, companyAccess: e.target.value ? [e.target.value] : [], defaultCompany: e.target.value, punchEmployees: [] })} required>
+                    <option value="">Select company</option>
+                    {companies.map((company) => <option key={company._id} value={company._id}>{company.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <div className="mb-1 flex items-center justify-between">
+                    <label className="text-sm font-medium text-slate-700">Employees allowed to punch ({form.punchEmployees.length} selected)</label>
+                    <div className="flex gap-2 text-xs">
+                      <button type="button" className="text-emerald-700 underline" onClick={() => setForm((f) => ({ ...f, punchEmployees: [...new Set([...f.punchEmployees, ...empOptions.map((o) => o._id)])] }))}>Select shown</button>
+                      <button type="button" className="text-slate-500 underline" onClick={() => setForm((f) => ({ ...f, punchEmployees: [] }))}>Clear</button>
+                    </div>
+                  </div>
+                  <input className={`${inputClass} mb-2`} placeholder="Search by name or ID" value={empSearch} onChange={(e) => setEmpSearch(e.target.value)} disabled={!secCompany} />
+                  <div className="max-h-48 space-y-1.5 overflow-auto rounded-lg border bg-white p-2">
+                    {empOptions.map((o) => (
+                      <label key={o._id} className="flex items-center gap-2 text-sm text-slate-700">
+                        <input type="checkbox" checked={form.punchEmployees.includes(o._id)} onChange={() => toggleEmp(o._id)} />
+                        {o.name} <span className="text-xs text-slate-400">({o.employeeId}{o.section ? ` · ${o.section}` : ""})</span>
+                      </label>
+                    ))}
+                    {secCompany && empOptions.length === 0 && <p className="text-xs text-slate-400">No active employees found.</p>}
+                    {!secCompany && <p className="text-xs text-amber-700">Select a company first.</p>}
+                  </div>
+                  <p className="mt-1 text-xs text-slate-500">This user logs in only on the Punch app and can give IN / OUT to these employees. Punches cannot be edited by them.</p>
                 </div>
               </div>
             )}

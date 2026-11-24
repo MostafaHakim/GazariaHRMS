@@ -81,6 +81,16 @@ const authorize =
     next();
   };
 
+// নির্দিষ্ট রোল এই রুট-গ্রুপে ঢুকতেই পারবে না (SECURITY শুধু /api/punch ও /api/auth ব্যবহার করবে)
+const blockRoles =
+  (...roles) =>
+  (req, res, next) => {
+    if (req.user && roles.includes(req.user.role)) {
+      return res.status(403).json({ success: false, message: "This account can only use the Punch app" });
+    }
+    next();
+  };
+
 // নির্দিষ্ট রোল শুধু GET/HEAD/OPTIONS করতে পারবে (যেমন ACCOUNTS)
 const readOnlyFor =
   (...roles) =>
@@ -95,4 +105,4 @@ const readOnlyFor =
     next();
   };
 
-module.exports = { protect, authorize, readOnlyFor, signToken, getSecret };
+module.exports = { protect, authorize, readOnlyFor, blockRoles, signToken, getSecret };

@@ -23,10 +23,12 @@ const deviceRoutes = require("./routes/deviceRoutes");
 const financeRoutes = require("./routes/financeRoutes");
 const groupRoutes = require("./routes/groupRoutes");
 const userAccessRoutes = require("./routes/userAccessRoutes");
+const punchRoutes = require("./routes/punchRoutes");
 
 const {
   protect,
   readOnlyFor,
+  blockRoles,
   getSecret,
 } = require("./middleware/authMiddleware");
 const { requireCompany } = require("./middleware/companyContext");
@@ -113,6 +115,11 @@ app.use("/api/auth", authRoutes);
 
 // এর পর থেকে সব /api রুটে লগইন লাগবে
 app.use("/api", protect);
+
+// Web Punch (সিকিউরিটির মোবাইল অ্যাপ): SECURITY রোলের একমাত্র অনুমোদিত রুট
+app.use("/api/punch", punchRoutes);
+// SECURITY রোল এর নিচের কোনো রুটে ঢুকতে পারবে না
+app.use("/api", blockRoles("SECURITY"));
 
 // Advance & Loan: ACCOUNTS এখানে এন্ট্রি/অনুমোদন করতে পারে, তাই read-only নিয়মের আগে বসানো
 // (রোল অনুযায়ী অনুমতি advanceRoutes নিজেই দেখে)
